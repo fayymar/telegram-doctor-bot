@@ -6,8 +6,8 @@ load_dotenv()
 # Telegram Bot Token
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# Google Gemini API
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# Groq API
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -16,7 +16,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 # Проверка наличия всех необходимых переменных
 required_vars = {
     "BOT_TOKEN": BOT_TOKEN,
-    "GEMINI_API_KEY": GEMINI_API_KEY,
+    "GROQ_API_KEY": GROQ_API_KEY,
     "SUPABASE_URL": SUPABASE_URL,
     "SUPABASE_KEY": SUPABASE_KEY,
 }
