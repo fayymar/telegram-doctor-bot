@@ -1,14 +1,14 @@
-import google.generativeai as genai
+from groq import Groq
 from typing import Dict, List, Optional
 import json
 import config
 
-genai.configure(api_key=config.GEMINI_API_KEY)
+client = Groq(api_key=config.GROQ_API_KEY)
 
 
 class MedicalAIService:
     def __init__(self):
-        self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        self.model = "llama-3.1-70b-versatile"  # Или llama-3.1-8b-instant для быстрого ответа
         
         # Системный промпт для медицинского анализа
         self.system_prompt = """Ты - опытный медицинский ассистент, который помогает определить, к какому УЗКОМУ специалисту нужно обратиться пациенту на основе симптомов.
@@ -70,30 +70,32 @@ class MedicalAIService:
 """
         
         try:
-            response = self.model.generate_content(
-                f"{self.system_prompt}\n\n{context}",
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.3,
-                    max_output_tokens=500,
-                )
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": context}
+                ],
+                temperature=0.3,
+                max_tokens=500,
+                response_format={"type": "json_object"}
             )
             
-            # Парсим JSON из ответа
-            response_text = response.text.strip()
-            print(f"Gemini ответ: {response_text[:200]}")  # Логируем первые 200 символов
-            
-            # Убираем markdown форматирование если есть
-            if response_text.startswith("```json"):
-                response_text = response_text[7:-3].strip()
-            elif response_text.startswith("```"):
-                response_text = response_text[3:-3].strip()
+            # Получаем JSON ответ
+            response_text = response.choices[0].message.content.strip()
+            print(f"Groq ответ: {response_text[:200]}")  # Логируем первые 200 символов
             
             result = json.loads(response_text)
+            
+            # Валидация ответа
+            if "action" not in result:
+                raise ValueError("Ответ не содержит поле 'action'")
+            
             return result
             
         except json.JSONDecodeError as e:
             print(f"Ошибка парсинга JSON: {e}")
-            print(f"Ответ от Gemini был: {response_text[:500] if 'response_text' in locals() else 'не получен'}")
+            print(f"Ответ от Groq был: {response_text[:500] if 'response_text' in locals() else 'не получен'}")
             # Fallback: задаём базовый вопрос
             return {
                 "action": "ask_question",
@@ -105,7 +107,7 @@ class MedicalAIService:
             # Fallback: задаём базовый вопрос
             return {
                 "action": "ask_question",
-                "question": "Расскажите подробнее о ваших симптомах. Что именно вас беспокоит?",
+                "question": "Расскажите подробнее о ваших симптомах. Когда они появились?",
                 "reasoning": "Временная техническая проблема с AI"
             }
     
