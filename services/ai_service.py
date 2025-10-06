@@ -80,6 +80,7 @@ class MedicalAIService:
             
             # Парсим JSON из ответа
             response_text = response.text.strip()
+            print(f"Gemini ответ: {response_text[:200]}")  # Логируем первые 200 символов
             
             # Убираем markdown форматирование если есть
             if response_text.startswith("```json"):
@@ -90,13 +91,22 @@ class MedicalAIService:
             result = json.loads(response_text)
             return result
             
-        except Exception as e:
-            print(f"Ошибка при анализе: {e}")
+        except json.JSONDecodeError as e:
+            print(f"Ошибка парсинга JSON: {e}")
+            print(f"Ответ от Gemini был: {response_text[:500] if 'response_text' in locals() else 'не получен'}")
             # Fallback: задаём базовый вопрос
             return {
                 "action": "ask_question",
-                "question": "Как давно вы заметили эти симптомы?",
-                "reasoning": "Необходима дополнительная информация"
+                "question": "Расскажите подробнее о ваших симптомах. Что именно вас беспокоит?",
+                "reasoning": "Ошибка обработки ответа AI"
+            }
+        except Exception as e:
+            print(f"Ошибка при анализе симптомов: {type(e).__name__}: {str(e)}")
+            # Fallback: задаём базовый вопрос
+            return {
+                "action": "ask_question",
+                "question": "Расскажите подробнее о ваших симптомах. Что именно вас беспокоит?",
+                "reasoning": "Временная техническая проблема с AI"
             }
     
     def _format_profile(self, profile: Optional[Dict]) -> str:
