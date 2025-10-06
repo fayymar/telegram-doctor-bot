@@ -8,7 +8,7 @@ client = Groq(api_key=config.GROQ_API_KEY)
 
 class MedicalAIService:
     def __init__(self):
-        self.model = "llama-3.1-70b-versatile"  # Или llama-3.1-8b-instant для быстрого ответа
+        self.model = "llama-3.1-8b-instant"  # Быстрая модель для медицинского анализа
         
         # Системный промпт для медицинского анализа
         self.system_prompt = """Ты - опытный медицинский ассистент, который помогает определить, к какому УЗКОМУ специалисту нужно обратиться пациенту на основе симптомов.
@@ -70,6 +70,7 @@ class MedicalAIService:
 """
         
         try:
+            # Пробуем без response_format (не все модели поддерживают)
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -77,15 +78,22 @@ class MedicalAIService:
                     {"role": "user", "content": context}
                 ],
                 temperature=0.3,
-                max_tokens=500,
-                response_format={"type": "json_object"}
+                max_tokens=500
             )
             
-            # Получаем JSON ответ
+            # Получаем ответ
             response_text = response.choices[0].message.content.strip()
-            print(f"Groq ответ: {response_text[:200]}")  # Логируем первые 200 символов
+            print(f"✅ Groq ответ получен ({len(response_text)} символов)")
+            print(f"Первые 300 символов: {response_text[:300]}")
+            
+            # Убираем markdown если есть
+            if response_text.startswith("```json"):
+                response_text = response_text[7:-3].strip()
+            elif response_text.startswith("```"):
+                response_text = response_text[3:-3].strip()
             
             result = json.loads(response_text)
+            print(f"✅ JSON распарсен успешно: action={result.get('action')}")
             
             # Валидация ответа
             if "action" not in result:
@@ -94,20 +102,30 @@ class MedicalAIService:
             return result
             
         except json.JSONDecodeError as e:
-            print(f"Ошибка парсинга JSON: {e}")
+            print(f"❌ Ошибка парсинга JSON: {e}")
             print(f"Ответ от Groq был: {response_text[:500] if 'response_text' in locals() else 'не получен'}")
-            # Fallback: задаём базовый вопрос
             return {
                 "action": "ask_question",
                 "question": "Расскажите подробнее о ваших симптомах. Что именно вас беспокоит?",
                 "reasoning": "Ошибка обработки ответа AI"
             }
         except Exception as e:
-            print(f"Ошибка при анализе симптомов: {type(e).__name__}: {str(e)}")
-            # Fallback: задаём базовый вопрос
+            error_type = type(e).__name__
+            error_msg = str(e)
+            print(f"❌ Ошибка {error_type}: {error_msg}")
+            
+            # Пытаемся получить детали ошибки
+            if hasattr(e, 'response'):
+                try:
+                    print(f"Response status: {e.response.status_code}")
+                    error_detail = e.response.json() if hasattr(e.response, 'json') else str(e.response.content)
+                    print(f"Response body: {error_detail}")
+                except:
+                    pass
+            
             return {
                 "action": "ask_question",
-                "question": "Расскажите подробнее о ваших симптомах. Когда они появились?",
+                "question": "Расскажите подробнее о ваших симптомах. Когда они появились и как проявляются?",
                 "reasoning": "Временная техническая проблема с AI"
             }
     
