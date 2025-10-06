@@ -8,7 +8,7 @@ genai.configure(api_key=config.GEMINI_API_KEY)
 
 class MedicalAIService:
     def __init__(self):
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
         
         # Системный промпт для медицинского анализа
         self.system_prompt = """Ты - опытный медицинский ассистент, который помогает определить, к какому УЗКОМУ специалисту нужно обратиться пациенту на основе симптомов.
