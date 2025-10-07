@@ -40,8 +40,6 @@ async def process_gender(message: Message, state: FSMContext):
         gender = "male"
     elif "женский" in text or "жен" in text:
         gender = "female"
-    elif "другой" in text or "друг" in text:
-        gender = "other"
     else:
         await message.answer(
             "⚠️ Пожалуйста, выберите пол используя кнопки:",
@@ -132,8 +130,7 @@ async def view_profile(message: Message):
     
     gender_map = {
         "male": "Мужской",
-        "female": "Женский",
-        "other": "Другой"
+        "female": "Женский"
     }
     
     profile_text = "👤 <b>Ваш профиль:</b>\n\n"
