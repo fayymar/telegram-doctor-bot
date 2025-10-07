@@ -19,8 +19,7 @@ def gender_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.button(text="👨 Мужской")
     builder.button(text="👩 Женский")
-    builder.button(text="⚧ Другой")
-    builder.adjust(3)
+    builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
 
