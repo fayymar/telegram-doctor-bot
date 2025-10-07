@@ -228,7 +228,7 @@ class MedicalAIService:
         if profile.get("age"):
             lines.append(f"Возраст: {profile['age']} лет")
         if profile.get("gender"):
-            gender_map = {"male": "мужской", "female": "женский", "other": "другой"}
+            gender_map = {"male": "мужской", "female": "женский"}
             lines.append(f"Пол: {gender_map.get(profile['gender'], profile['gender'])}")
         if profile.get("height"):
             lines.append(f"Рост: {profile['height']} см")
