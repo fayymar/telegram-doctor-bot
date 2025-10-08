@@ -22,81 +22,76 @@ def get_main_menu() -> ReplyKeyboardMarkup:
 # ============ РЕГИСТРАЦИЯ ============
 
 def get_phone_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура для запроса телефона"""
+    """Клавиатура для запроса телефона (ОБЯЗАТЕЛЬНО)"""
     keyboard = [
-        [KeyboardButton(text="📱 Поделиться номером", request_contact=True)],
-        [KeyboardButton(text="⏭ Пропустить")]
+        [KeyboardButton(text="📱 Поделиться номером", request_contact=True)]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def get_gender_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора пола"""
+def get_gender_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура выбора пола (ОБЫЧНЫЕ КНОПКИ)"""
     keyboard = [
-        [InlineKeyboardButton(text="👨 Мужской", callback_data="gender_male")],
-        [InlineKeyboardButton(text="👩 Женский", callback_data="gender_female")]
+        [KeyboardButton(text="👨 Мужской"), KeyboardButton(text="👩 Женский")]
     ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 
-def get_skip_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура с кнопкой 'Пропустить'"""
-    keyboard = [[KeyboardButton(text="⏭ Пропустить")]]
+def get_cancel_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура с кнопкой отмены"""
+    keyboard = [[KeyboardButton(text="❌ Отменить")]]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
 # ============ ПРОФИЛЬ ============
 
-def get_profile_menu() -> InlineKeyboardMarkup:
-    """Меню профиля"""
+def get_profile_menu() -> ReplyKeyboardMarkup:
+    """Меню профиля (ОБЫЧНЫЕ КНОПКИ)"""
     keyboard = [
-        [InlineKeyboardButton(text="✏️ Изменить данные", callback_data="edit_profile")],
-        [InlineKeyboardButton(text="🔙 В главное меню", callback_data="back_to_main")]
+        [KeyboardButton(text="✏️ Изменить данные")],
+        [KeyboardButton(text="🔙 В главное меню")]
     ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def get_edit_profile_menu() -> InlineKeyboardMarkup:
-    """Меню выбора поля для редактирования"""
+def get_edit_profile_menu() -> ReplyKeyboardMarkup:
+    """Меню выбора поля для редактирования (ОБЫЧНЫЕ КНОПКИ)"""
     keyboard = [
-        [InlineKeyboardButton(text="👤 ФИО", callback_data="edit_full_name")],
-        [InlineKeyboardButton(text="📱 Телефон", callback_data="edit_phone")],
-        [InlineKeyboardButton(text="🎂 Дата рождения", callback_data="edit_birthdate")],
-        [InlineKeyboardButton(text="⚧️ Пол", callback_data="edit_gender")],
-        [InlineKeyboardButton(text="📏 Рост", callback_data="edit_height")],
-        [InlineKeyboardButton(text="⚖️ Вес", callback_data="edit_weight")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_profile")]
+        [KeyboardButton(text="👤 ФИО"), KeyboardButton(text="📱 Телефон")],
+        [KeyboardButton(text="🎂 Дата рождения"), KeyboardButton(text="⚧️ Пол")],
+        [KeyboardButton(text="📏 Рост"), KeyboardButton(text="⚖️ Вес")],
+        [KeyboardButton(text="🔙 Назад к профилю")]
     ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
 # ============ КОНСУЛЬТАЦИЯ ============
 
-def get_symptoms_confirmation() -> InlineKeyboardMarkup:
-    """Подтверждение симптомов (Этап 1)"""
+def get_symptoms_confirmation() -> ReplyKeyboardMarkup:
+    """Подтверждение симптомов - ТОЛЬКО ОТМЕНИТЬ"""
     keyboard = [
-        [InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_symptoms")],
-        [InlineKeyboardButton(text="➕ Добавить", callback_data="add_symptoms")],
-        [InlineKeyboardButton(text="🔄 Начать заново", callback_data="restart_symptoms")],
-        [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_consultation")]
+        [KeyboardButton(text="✅ Подтвердить")],
+        [KeyboardButton(text="➕ Добавить детали")],
+        [KeyboardButton(text="🔄 Начать заново")],
+        [KeyboardButton(text="❌ Отменить")]
     ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def get_duration_keyboard() -> InlineKeyboardMarkup:
-    """Выбор давности симптомов (Этап 2)"""
+def get_duration_keyboard() -> ReplyKeyboardMarkup:
+    """Выбор давности симптомов (ОБЫЧНЫЕ КНОПКИ)"""
     keyboard = [
-        [InlineKeyboardButton(text="⏱ Меньше 24 часов", callback_data="duration_24h")],
-        [InlineKeyboardButton(text="📅 1-3 дня", callback_data="duration_1-3d")],
-        [InlineKeyboardButton(text="📅 3-7 дней", callback_data="duration_3-7d")],
-        [InlineKeyboardButton(text="📆 Больше недели", callback_data="duration_week+")]
+        [KeyboardButton(text="⏱ Меньше 24 часов")],
+        [KeyboardButton(text="📅 1-3 дня")],
+        [KeyboardButton(text="📅 3-7 дней")],
+        [KeyboardButton(text="📆 Больше недели")]
     ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 
 def get_additional_symptoms_keyboard(symptoms: list[str]) -> InlineKeyboardMarkup:
     """
-    Клавиатура с дополнительными симптомами (Этап 3)
+    Клавиатура с дополнительными симптомами (ИНЛАЙН)
     
     Args:
         symptoms: Список симптомов от AI
@@ -107,7 +102,7 @@ def get_additional_symptoms_keyboard(symptoms: list[str]) -> InlineKeyboardMarku
     for symptom in symptoms[:10]:
         keyboard.append([InlineKeyboardButton(
             text=f"◻️ {symptom}", 
-            callback_data=f"symptom_{symptom[:50]}"  # Ограничение длины callback
+            callback_data=f"symptom_{symptom[:50]}"
         )])
     
     # Служебные кнопки
@@ -116,6 +111,12 @@ def get_additional_symptoms_keyboard(symptoms: list[str]) -> InlineKeyboardMarku
     keyboard.append([InlineKeyboardButton(text="✅ Готово", callback_data="done_additional")])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_additional_cancel_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура для третьего этапа - только отменить"""
+    keyboard = [[KeyboardButton(text="❌ Отменить")]]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
 def update_symptom_selection(keyboard: InlineKeyboardMarkup, selected: set) -> InlineKeyboardMarkup:
@@ -152,83 +153,66 @@ def update_symptom_selection(keyboard: InlineKeyboardMarkup, selected: set) -> I
     return InlineKeyboardMarkup(inline_keyboard=new_keyboard)
 
 
-def get_final_confirmation() -> InlineKeyboardMarkup:
-    """Финальное подтверждение (Этап 4)"""
+def get_final_confirmation() -> ReplyKeyboardMarkup:
+    """Финальное подтверждение (ОБЫЧНЫЕ КНОПКИ)"""
     keyboard = [
-        [InlineKeyboardButton(text="✅ Подтвердить", callback_data="final_confirm")],
-        [InlineKeyboardButton(text="➕ Добавить симптомы", callback_data="add_more_symptoms")],
-        [InlineKeyboardButton(text="🔄 Начать заново", callback_data="restart_consultation")],
-        [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_consultation")]
+        [KeyboardButton(text="✅ Подтвердить")],
+        [KeyboardButton(text="➕ Добавить симптомы")],
+        [KeyboardButton(text="🔄 Начать заново")],
+        [KeyboardButton(text="❌ Отменить")]
     ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def get_result_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура после получения рекомендации"""
+def get_result_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура после получения рекомендации (ОБЫЧНЫЕ КНОПКИ)"""
     keyboard = [
-        [InlineKeyboardButton(text="📝 Записаться (в разработке)", callback_data="book_appointment")],
-        [InlineKeyboardButton(text="🩺 Новая консультация", callback_data="new_consultation")],
-        [InlineKeyboardButton(text="📋 История", callback_data="view_history")]
+        [KeyboardButton(text="📝 Записаться (в разработке)")],
+        [KeyboardButton(text="🏠 В главное меню")]
     ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
 # ============ ПОИСК СПЕЦИАЛИСТОВ ============
 
-def get_specialist_categories() -> InlineKeyboardMarkup:
-    """Категории специалистов"""
+def get_specialist_categories() -> ReplyKeyboardMarkup:
+    """Категории специалистов (ОБЫЧНЫЕ КНОПКИ)"""
     keyboard = [
-        [InlineKeyboardButton(text="❤️ Сердце и сосуды", callback_data="cat_cardio")],
-        [InlineKeyboardButton(text="🧠 Нервная система", callback_data="cat_neuro")],
-        [InlineKeyboardButton(text="🍽 Пищеварение", callback_data="cat_gastro")],
-        [InlineKeyboardButton(text="💊 Гормоны и обмен веществ", callback_data="cat_endo")],
-        [InlineKeyboardButton(text="🫁 Дыхательная система", callback_data="cat_pulmo")],
-        [InlineKeyboardButton(text="🦴 Опорно-двигательный аппарат", callback_data="cat_ortho")],
-        [InlineKeyboardButton(text="👁 Зрение и слух", callback_data="cat_sense")],
-        [InlineKeyboardButton(text="🧬 Кожа и аллергия", callback_data="cat_derm")],
-        [InlineKeyboardButton(text="👶 Женское и мужское здоровье", callback_data="cat_repro")],
-        [InlineKeyboardButton(text="🩺 Другие специалисты", callback_data="cat_other")],
-        [InlineKeyboardButton(text="🔙 В главное меню", callback_data="back_to_main")]
+        [KeyboardButton(text="❤️ Сердце и сосуды")],
+        [KeyboardButton(text="🧠 Нервная система")],
+        [KeyboardButton(text="🍽 Пищеварение")],
+        [KeyboardButton(text="💊 Гормоны и обмен веществ")],
+        [KeyboardButton(text="🫁 Дыхательная система")],
+        [KeyboardButton(text="🦴 Опорно-двигательный аппарат")],
+        [KeyboardButton(text="👁 Зрение и слух")],
+        [KeyboardButton(text="🧬 Кожа и аллергия")],
+        [KeyboardButton(text="👶 Женское и мужское здоровье")],
+        [KeyboardButton(text="🩺 Другие специалисты")],
+        [KeyboardButton(text="🔙 В главное меню")]
     ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def get_specialists_in_category(category: str) -> InlineKeyboardMarkup:
+def get_specialists_in_category(specialists: list[str]) -> ReplyKeyboardMarkup:
     """
-    Список специалистов в категории
+    Список специалистов в категории (ОБЫЧНЫЕ КНОПКИ)
     
     Args:
-        category: Код категории (например, 'cardio')
+        specialists: Список специалистов
     """
-    specialists_map = {
-        "cardio": ["Кардиолог", "Флеболог", "Сосудистый хирург"],
-        "neuro": ["Невролог", "Нейрохирург", "Психиатр"],
-        "gastro": ["Гастроэнтеролог", "Проктолог", "Гепатолог"],
-        "endo": ["Эндокринолог", "Диабетолог"],
-        "pulmo": ["Пульмонолог", "Фтизиатр"],
-        "ortho": ["Ортопед-травматолог", "Ревматолог", "Мануальный терапевт"],
-        "sense": ["Офтальмолог", "Отоларинголог (ЛОР)", "Сурдолог"],
-        "derm": ["Дерматолог", "Аллерголог-иммунолог", "Трихолог"],
-        "repro": ["Гинеколог", "Уролог", "Маммолог", "Андролог"],
-        "other": ["Хирург", "Онколог", "Нефролог", "Инфекционист"]
-    }
-    
-    specialists = specialists_map.get(category, [])
     keyboard = []
     
     for specialist in specialists:
-        keyboard.append([InlineKeyboardButton(
-            text=f"🩺 {specialist}", 
-            callback_data=f"spec_{specialist}"
-        )])
+        keyboard.append([KeyboardButton(text=f"🩺 {specialist}")])
     
-    keyboard.append([InlineKeyboardButton(text="🔙 К категориям", callback_data="back_to_categories")])
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    keyboard.append([KeyboardButton(text="🔙 К категориям")])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-# ============ ОТМЕНА ============
-
-def get_cancel_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура с кнопкой отмены"""
-    keyboard = [[KeyboardButton(text="❌ Отменить")]]
+def get_specialist_actions() -> ReplyKeyboardMarkup:
+    """Действия при просмотре специалиста (ОБЫЧНЫЕ КНОПКИ)"""
+    keyboard = [
+        [KeyboardButton(text="🩺 Начать консультацию")],
+        [KeyboardButton(text="🔙 К списку специалистов")]
+    ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
