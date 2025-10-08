@@ -225,8 +225,18 @@ class MedicalAIService:
             return "Информация о пациенте не указана"
         
         lines = []
-        if profile.get("age"):
-            lines.append(f"Возраст: {profile['age']} лет")
+        
+        # Вычисляем возраст из даты рождения
+        if profile.get("birthdate"):
+            try:
+                from datetime import datetime
+                birthdate = datetime.fromisoformat(profile['birthdate']).date()
+                today = datetime.now().date()
+                age = today.year - birthdate.year - ((today.month, today.day) < (birthdate.month, birthdate.day))
+                lines.append(f"Возраст: {age} лет")
+            except:
+                pass
+        
         if profile.get("gender"):
             gender_map = {"male": "мужской", "female": "женский"}
             lines.append(f"Пол: {gender_map.get(profile['gender'], profile['gender'])}")
