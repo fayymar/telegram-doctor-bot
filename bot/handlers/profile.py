@@ -7,7 +7,8 @@ from aiogram.fsm.context import FSMContext
 from bot.states import Registration, EditProfile
 from bot.keyboards import (
     get_main_menu, get_phone_keyboard, get_gender_keyboard, 
-    get_skip_keyboard, get_profile_menu, get_edit_profile_menu
+    get_skip_keyboard, get_profile_menu, get_edit_profile_menu,
+    get_cancel_keyboard
 )
 from database.connection import supabase_client
 from database.models import UserProfile
