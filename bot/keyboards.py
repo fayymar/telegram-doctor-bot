@@ -23,6 +23,15 @@ def gender_keyboard() -> ReplyKeyboardMarkup:
     return builder.as_markup(resize_keyboard=True)
 
 
+def phone_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура для запроса телефона"""
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="📱 Поделиться номером", request_contact=True)
+    builder.button(text="⏭️ Пропустить")
+    builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
+
+
 def cancel_keyboard() -> ReplyKeyboardMarkup:
     """Клавиатура с кнопкой отмены"""
     builder = ReplyKeyboardBuilder()
