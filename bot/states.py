@@ -3,7 +3,9 @@ from aiogram.fsm.state import State, StatesGroup
 
 class RegistrationStates(StatesGroup):
     """Состояния регистрации пользователя"""
-    waiting_for_age = State()
+    waiting_for_full_name = State()
+    waiting_for_phone = State()
+    waiting_for_birthdate = State()
     waiting_for_gender = State()
     waiting_for_height = State()
     waiting_for_weight = State()
