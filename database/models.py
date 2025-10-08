@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional
 from pydantic import BaseModel
 
@@ -7,8 +7,10 @@ class UserProfile(BaseModel):
     """Профиль пользователя"""
     user_id: int
     username: Optional[str] = None
-    age: Optional[int] = None
-    gender: Optional[str] = None  # 'male', 'female', 'other'
+    full_name: Optional[str] = None  # ФИО
+    phone: Optional[str] = None  # Номер телефона
+    birthdate: Optional[date] = None  # Дата рождения
+    gender: Optional[str] = None  # 'male', 'female'
     height: Optional[int] = None  # в см
     weight: Optional[float] = None  # в кг
     created_at: datetime = datetime.now()
