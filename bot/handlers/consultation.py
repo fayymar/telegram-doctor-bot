@@ -9,6 +9,7 @@ from bot.keyboards import (
     get_symptoms_confirmation,
     get_duration_keyboard,
     get_additional_symptoms_keyboard,
+    get_additional_cancel_keyboard,
     update_symptom_selection,
     get_final_confirmation,
     get_result_keyboard
@@ -30,7 +31,6 @@ async def get_user_profile(user_id: int) -> dict:
         if response.data:
             profile = response.data[0]
             
-            # Вычисляем возраст
             if profile.get('birthdate'):
                 birthdate = datetime.fromisoformat(profile['birthdate'])
                 age = (datetime.now() - birthdate).days // 365
@@ -73,7 +73,6 @@ async def save_consultation(user_id: int, data: dict):
 @router.message(F.text == "🩺 Новая консультация")
 async def start_consultation(message: Message, state: FSMContext):
     """Начало новой консультации"""
-    # Проверяем регистрацию
     try:
         response = supabase_client.table('user_profiles').select('user_id').eq('user_id', message.from_user.id).execute()
         if not response.data:
@@ -85,7 +84,6 @@ async def start_consultation(message: Message, state: FSMContext):
     except Exception as e:
         print(f"DB Error: {e}")
     
-    # Очищаем предыдущие данные
     await state.clear()
     
     await message.answer(
@@ -95,6 +93,7 @@ async def start_consultation(message: Message, state: FSMContext):
         "Что вас беспокоит? Какие ощущения?\n\n"
         "💡 Вы можете отправить текст или голосовое сообщение.\n\n"
         "❌ Для отмены используйте /cancel",
+        reply_markup=get_symptoms_confirmation(),
         parse_mode="Markdown"
     )
     
@@ -109,7 +108,7 @@ async def process_symptoms_text(message: Message, state: FSMContext):
     
     symptoms_text = message.text.strip()
     
-    # ВАЛИДАЦИЯ: Проверяем, что это действительно симптомы
+    # ВАЛИДАЦИЯ
     await message.answer("⏳ Проверяю ваше сообщение...")
     
     validation = ai_service.validate_symptoms(symptoms_text)
@@ -128,7 +127,6 @@ async def process_symptoms_text(message: Message, state: FSMContext):
         )
         return
     
-    # Используем очищенные симптомы от AI
     clean_symptoms = validation['symptoms'] if validation['symptoms'] else symptoms_text
     
     await state.update_data(main_symptoms=clean_symptoms)
@@ -155,14 +153,11 @@ async def process_symptoms_voice(message: Message, state: FSMContext):
 
 # ============ ПОДТВЕРЖДЕНИЕ СИМПТОМОВ ============
 
-@router.callback_query(Consultation.confirming_symptoms, F.data == "confirm_symptoms")
-async def confirm_symptoms(callback: CallbackQuery, state: FSMContext):
+@router.message(Consultation.confirming_symptoms, F.text == "✅ Подтвердить")
+async def confirm_symptoms(message: Message, state: FSMContext):
     """Подтверждение симптомов"""
-    await callback.message.edit_text(
-        "✅ Симптомы подтверждены"
-    )
-    
-    await callback.message.answer(
+    await message.answer(
+        "✅ Симптомы подтверждены\n\n"
         "📅 *Этап 2 из 4*\n\n"
         "Как давно вас беспокоят эти симптомы?",
         reply_markup=get_duration_keyboard(),
@@ -170,55 +165,46 @@ async def confirm_symptoms(callback: CallbackQuery, state: FSMContext):
     )
     
     await state.set_state(Consultation.waiting_for_duration)
-    await callback.answer()
 
 
-@router.callback_query(Consultation.confirming_symptoms, F.data == "add_symptoms")
-async def add_more_symptoms(callback: CallbackQuery, state: FSMContext):
+@router.message(Consultation.confirming_symptoms, F.text == "➕ Добавить детали")
+async def add_more_symptoms(message: Message, state: FSMContext):
     """Добавление дополнительных деталей"""
-    await callback.message.edit_text(
-        "📝 Добавьте дополнительные детали к описанию симптомов:"
+    await message.answer(
+        "📝 Добавьте дополнительные детали к описанию симптомов:",
+        reply_markup=get_symptoms_confirmation()
     )
     
     await state.set_state(Consultation.waiting_for_symptoms)
-    await callback.answer()
 
 
-@router.callback_query(Consultation.confirming_symptoms, F.data == "restart_symptoms")
-async def restart_symptoms(callback: CallbackQuery, state: FSMContext):
+@router.message(Consultation.confirming_symptoms, F.text == "🔄 Начать заново")
+async def restart_symptoms(message: Message, state: FSMContext):
     """Начать описание заново"""
-    await callback.message.edit_text(
+    await message.answer(
         "🔄 Начинаем заново\n\n"
-        "Опишите ваши симптомы:"
+        "Опишите ваши симптомы:",
+        reply_markup=get_symptoms_confirmation()
     )
     
     await state.set_state(Consultation.waiting_for_symptoms)
-    await callback.answer()
 
 
 # ============ ЭТАП 2: ДАВНОСТЬ СИМПТОМОВ ============
 
-@router.callback_query(Consultation.waiting_for_duration, F.data.startswith("duration_"))
-async def process_duration(callback: CallbackQuery, state: FSMContext):
+@router.message(Consultation.waiting_for_duration, F.text.in_([
+    "⏱ Меньше 24 часов", "📅 1-3 дня", "📅 3-7 дней", "📆 Больше недели"
+]))
+async def process_duration(message: Message, state: FSMContext):
     """Обработка выбора давности"""
-    duration_map = {
-        "24h": "Меньше 24 часов",
-        "1-3d": "1-3 дня",
-        "3-7d": "3-7 дней",
-        "week+": "Больше недели"
-    }
-    
-    duration_key = callback.data.split("_")[1]
-    duration_text = duration_map.get(duration_key, "не указано")
+    duration_text = message.text.replace("⏱ ", "").replace("📅 ", "").replace("📆 ", "")
     
     await state.update_data(duration=duration_text)
     
-    await callback.message.edit_text(
-        f"📅 Давность: {duration_text}"
-    )
+    await message.answer(f"📅 Давность: {duration_text}")
     
     # Генерируем дополнительные симптомы через AI
-    await callback.message.answer("⏳ Анализирую симптомы...")
+    await message.answer("⏳ Анализирую симптомы...")
     
     data = await state.get_data()
     main_symptoms = data.get('main_symptoms', '')
@@ -229,13 +215,11 @@ async def process_duration(callback: CallbackQuery, state: FSMContext):
     )
     
     if not additional_symptoms:
-        # Если AI не смог сгенерировать, переходим к финалу
-        await callback.message.answer(
+        await message.answer(
             "❌ Не удалось сгенерировать дополнительные вопросы\n"
             "Переходим к финальному этапу..."
         )
-        await show_final_confirmation(callback.message, state)
-        await callback.answer()
+        await show_final_confirmation(message, state)
         return
     
     await state.update_data(
@@ -243,16 +227,20 @@ async def process_duration(callback: CallbackQuery, state: FSMContext):
         selected_additional=set()
     )
     
-    await callback.message.answer(
+    await message.answer(
         "📋 *Этап 3 из 4*\n\n"
         "Отметьте, что ещё вас беспокоит:\n"
         "(выберите все подходящие варианты)",
-        reply_markup=get_additional_symptoms_keyboard(additional_symptoms),
+        reply_markup=get_additional_cancel_keyboard(),
         parse_mode="Markdown"
     )
     
+    await message.answer(
+        "Выберите симптомы:",
+        reply_markup=get_additional_symptoms_keyboard(additional_symptoms)
+    )
+    
     await state.set_state(Consultation.selecting_additional_symptoms)
-    await callback.answer()
 
 
 # ============ ЭТАП 3: ДОПОЛНИТЕЛЬНЫЕ СИМПТОМЫ ============
@@ -260,15 +248,12 @@ async def process_duration(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(Consultation.selecting_additional_symptoms, F.data.startswith("symptom_"))
 async def toggle_symptom(callback: CallbackQuery, state: FSMContext):
     """Переключение выбора симптома"""
-    # Извлекаем название симптома из текста кнопки
     symptom = callback.data.replace("symptom_", "")
     
-    # Находим полное название из опций
     data = await state.get_data()
     options = data.get('additional_symptoms_options', [])
     selected = data.get('selected_additional', set())
     
-    # Ищем полное совпадение
     full_symptom = None
     for opt in options:
         if opt.startswith(symptom) or symptom in opt:
@@ -279,7 +264,6 @@ async def toggle_symptom(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Ошибка выбора")
         return
     
-    # Переключаем выбор
     if full_symptom in selected:
         selected.remove(full_symptom)
     else:
@@ -287,7 +271,6 @@ async def toggle_symptom(callback: CallbackQuery, state: FSMContext):
     
     await state.update_data(selected_additional=selected)
     
-    # Обновляем клавиатуру
     updated_keyboard = update_symptom_selection(
         callback.message.reply_markup,
         selected
@@ -302,9 +285,8 @@ async def no_additional_symptoms(callback: CallbackQuery, state: FSMContext):
     """Нет дополнительных симптомов"""
     await state.update_data(selected_additional=set())
     
-    await callback.message.edit_text(
-        "✅ Дополнительных симптомов нет"
-    )
+    await callback.message.delete()
+    await callback.message.answer("✅ Дополнительных симптомов нет")
     
     await show_final_confirmation(callback.message, state)
     await callback.answer()
@@ -313,8 +295,10 @@ async def no_additional_symptoms(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(Consultation.selecting_additional_symptoms, F.data == "other_symptom")
 async def other_symptom(callback: CallbackQuery, state: FSMContext):
     """Описать другой симптом"""
-    await callback.message.edit_text(
-        "✏️ Опишите дополнительный симптом:"
+    await callback.message.delete()
+    await callback.message.answer(
+        "✏️ Опишите дополнительный симптом:",
+        reply_markup=get_additional_cancel_keyboard()
     )
     
     await state.set_state(Consultation.waiting_for_other_symptoms)
@@ -336,18 +320,16 @@ async def process_other_symptom(message: Message, state: FSMContext):
         )
         return
     
-    # Добавляем к выбранным
     data = await state.get_data()
     selected = data.get('selected_additional', set())
     selected.add(validation['symptoms'] if validation['symptoms'] else other_symptom)
     
     await state.update_data(selected_additional=selected)
     
-    # Возвращаемся к выбору
     options = data.get('additional_symptoms_options', [])
     
+    await message.answer("✅ Симптом добавлен")
     await message.answer(
-        "✅ Симптом добавлен\n\n"
         "Выберите ещё или нажмите 'Готово':",
         reply_markup=get_additional_symptoms_keyboard(options)
     )
@@ -361,14 +343,16 @@ async def done_additional_symptoms(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     selected = data.get('selected_additional', set())
     
+    await callback.message.delete()
+    
     if selected:
         symptoms_list = "\n".join([f"• {s}" for s in selected])
-        await callback.message.edit_text(
+        await callback.message.answer(
             f"✅ *Дополнительные симптомы:*\n\n{symptoms_list}",
             parse_mode="Markdown"
         )
     else:
-        await callback.message.edit_text("✅ Дополнительных симптомов не выбрано")
+        await callback.message.answer("✅ Дополнительных симптомов не выбрано")
     
     await show_final_confirmation(callback.message, state)
     await callback.answer()
@@ -384,7 +368,6 @@ async def show_final_confirmation(message: Message, state: FSMContext):
     duration = data.get('duration', 'не указано')
     additional = data.get('selected_additional', set())
     
-    # Формируем текст анамнеза
     anamnesis = f"📋 *Финальное подтверждение*\n\n"
     anamnesis += f"*Основные симптомы:*\n{main_symptoms}\n\n"
     anamnesis += f"*Давность:* {duration}\n\n"
@@ -407,18 +390,16 @@ async def show_final_confirmation(message: Message, state: FSMContext):
     await state.set_state(Consultation.final_confirmation)
 
 
-@router.callback_query(Consultation.final_confirmation, F.data == "final_confirm")
-async def final_confirm(callback: CallbackQuery, state: FSMContext):
+@router.message(Consultation.final_confirmation, F.text == "✅ Подтвердить")
+async def final_confirm(message: Message, state: FSMContext):
     """Финальное подтверждение и получение рекомендации"""
-    await callback.message.edit_text("✅ Данные подтверждены")
+    await message.answer("✅ Данные подтверждены")
     
-    await callback.message.answer("⏳ Анализирую симптомы и подбираю специалиста...")
+    await message.answer("⏳ Анализирую симптомы и подбираю специалиста...")
     
-    # Получаем данные
     data = await state.get_data()
-    user_profile = await get_user_profile(callback.from_user.id)
+    user_profile = await get_user_profile(message.from_user.id)
     
-    # Получаем рекомендацию от AI
     recommendation = ai_service.recommend_doctor(
         main_symptoms=data.get('main_symptoms', ''),
         duration=data.get('duration', ''),
@@ -426,8 +407,7 @@ async def final_confirm(callback: CallbackQuery, state: FSMContext):
         user_profile=user_profile
     )
     
-    # Сохраняем консультацию
-    await save_consultation(callback.from_user.id, {
+    await save_consultation(message.from_user.id, {
         'symptoms': {
             'main': data.get('main_symptoms'),
             'duration': data.get('duration'),
@@ -438,7 +418,6 @@ async def final_confirm(callback: CallbackQuery, state: FSMContext):
         'urgency': recommendation['urgency']
     })
     
-    # Формируем ответ
     urgency_emoji = {
         'emergency': '🚨',
         'high': '⚠️',
@@ -459,74 +438,64 @@ async def final_confirm(callback: CallbackQuery, state: FSMContext):
     result_text += f"{urgency_text.get(recommendation['urgency'], 'Средняя')}\n\n"
     result_text += f"*Обоснование:*\n{recommendation['reasoning']}"
     
-    await callback.message.answer(
+    await message.answer(
         result_text,
         reply_markup=get_result_keyboard(),
         parse_mode="Markdown"
     )
     
     await state.clear()
-    await callback.answer()
 
 
-@router.callback_query(Consultation.final_confirmation, F.data == "add_more_symptoms")
-async def add_more_from_final(callback: CallbackQuery, state: FSMContext):
+@router.message(Consultation.final_confirmation, F.text == "➕ Добавить симптомы")
+async def add_more_from_final(message: Message, state: FSMContext):
     """Добавить симптомы с финального этапа"""
-    await callback.message.edit_text("✏️ Опишите дополнительные симптомы:")
+    await message.answer(
+        "✏️ Опишите дополнительные симптомы:",
+        reply_markup=get_additional_cancel_keyboard()
+    )
     
     await state.set_state(Consultation.waiting_for_other_symptoms)
-    await callback.answer()
 
 
-@router.callback_query(Consultation.final_confirmation, F.data == "restart_consultation")
-async def restart_consultation(callback: CallbackQuery, state: FSMContext):
+@router.message(Consultation.final_confirmation, F.text == "🔄 Начать заново")
+async def restart_consultation(message: Message, state: FSMContext):
     """Начать консультацию заново"""
-    await callback.message.delete()
     await state.clear()
-    
-    fake_message = callback.message
-    fake_message.text = "🩺 Новая консультация"
-    
-    await start_consultation(fake_message, state)
-    await callback.answer()
+    await start_consultation(message, state)
 
 
 # ============ ДЕЙСТВИЯ ПОСЛЕ РЕЗУЛЬТАТА ============
 
-@router.callback_query(F.data == "new_consultation")
-async def new_consultation_callback(callback: CallbackQuery, state: FSMContext):
-    """Новая консультация из результата"""
-    await callback.message.delete()
+@router.message(F.text == "🏠 В главное меню")
+async def back_to_main_menu(message: Message, state: FSMContext):
+    """Возврат в главное меню"""
     await state.clear()
-    
-    fake_message = callback.message
-    fake_message.text = "🩺 Новая консультация"
-    
-    await start_consultation(fake_message, state)
-    await callback.answer()
+    await message.answer(
+        "Главное меню",
+        reply_markup=get_main_menu()
+    )
 
 
-@router.callback_query(F.data == "book_appointment")
-async def book_appointment(callback: CallbackQuery):
+@router.message(F.text == "📝 Записаться (в разработке)")
+async def book_appointment(message: Message):
     """Заглушка для записи к врачу"""
-    await callback.answer(
+    await message.answer(
         "📝 Функция записи к врачу находится в разработке",
-        show_alert=True
+        reply_markup=get_result_keyboard()
     )
 
 
 # ============ ОТМЕНА КОНСУЛЬТАЦИИ ============
 
-@router.callback_query(F.data == "cancel_consultation")
-async def cancel_consultation_callback(callback: CallbackQuery, state: FSMContext):
-    """Отмена консультации"""
+@router.message(F.text == "❌ Отменить")
+async def cancel_consultation_button(message: Message, state: FSMContext):
+    """Отмена консультации через кнопку"""
     await state.clear()
-    await callback.message.edit_text("❌ Консультация отменена")
-    await callback.message.answer(
-        "Главное меню",
+    await message.answer(
+        "❌ Консультация отменена",
         reply_markup=get_main_menu()
     )
-    await callback.answer()
 
 
 @router.message(F.text == "/cancel")
