@@ -1,9 +1,9 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 
 from bot.states import FindSpecialist
-from bot.keyboards import get_specialist_categories, get_specialists_in_category
+from bot.keyboards import get_specialist_categories, get_specialists_in_category, get_specialist_actions, get_main_menu
 
 
 router = Router()
@@ -138,12 +138,27 @@ SPECIALISTS_DATA = {
 }
 
 
+# Карта категорий
+CATEGORY_SPECIALISTS = {
+    "❤️ Сердце и сосуды": ["Кардиолог", "Флеболог", "Сосудистый хирург"],
+    "🧠 Нервная система": ["Невролог", "Нейрохирург", "Психиатр"],
+    "🍽 Пищеварение": ["Гастроэнтеролог", "Проктолог", "Гепатолог"],
+    "💊 Гормоны и обмен веществ": ["Эндокринолог", "Диабетолог"],
+    "🫁 Дыхательная система": ["Пульмонолог", "Фтизиатр"],
+    "🦴 Опорно-двигательный аппарат": ["Ортопед-травматолог", "Ревматолог", "Мануальный терапевт"],
+    "👁 Зрение и слух": ["Офтальмолог", "Отоларинголог (ЛОР)", "Сурдолог"],
+    "🧬 Кожа и аллергия": ["Дерматолог", "Аллерголог-иммунолог", "Трихолог"],
+    "👶 Женское и мужское здоровье": ["Гинеколог", "Уролог", "Маммолог", "Андролог"],
+    "🩺 Другие специалисты": ["Хирург", "Онколог", "Нефролог", "Инфекционист", "Терапевт"]
+}
+
+
 # ============ ГЛАВНОЕ МЕНЮ СПЕЦИАЛИСТОВ ============
 
 @router.message(F.text == "🔍 Найти специалиста")
 async def show_specialist_categories(message: Message, state: FSMContext):
     """Показывает категории специалистов"""
-    await state.clear()  # Сбрасываем предыдущие состояния
+    await state.clear()
     
     await message.answer(
         "🔍 *Найти специалиста*\n\n"
@@ -156,42 +171,29 @@ async def show_specialist_categories(message: Message, state: FSMContext):
 
 # ============ ВЫБОР КАТЕГОРИИ ============
 
-@router.callback_query(FindSpecialist.choosing_category, F.data.startswith("cat_"))
-async def show_specialists_in_category(callback: CallbackQuery, state: FSMContext):
+@router.message(FindSpecialist.choosing_category, F.text.in_(CATEGORY_SPECIALISTS.keys()))
+async def show_specialists_in_category(message: Message, state: FSMContext):
     """Показывает специалистов в выбранной категории"""
-    category = callback.data.split("_")[1]
-    
-    category_names = {
-        "cardio": "❤️ Сердце и сосуды",
-        "neuro": "🧠 Нервная система",
-        "gastro": "🍽 Пищеварение",
-        "endo": "💊 Гормоны и обмен веществ",
-        "pulmo": "🫁 Дыхательная система",
-        "ortho": "🦴 Опорно-двигательный аппарат",
-        "sense": "👁 Зрение и слух",
-        "derm": "🧬 Кожа и аллергия",
-        "repro": "👶 Женское и мужское здоровье",
-        "other": "🩺 Другие специалисты"
-    }
+    category = message.text
+    specialists = CATEGORY_SPECIALISTS[category]
     
     await state.update_data(current_category=category)
     
-    await callback.message.edit_text(
-        f"*{category_names.get(category, 'Специалисты')}*\n\n"
+    await message.answer(
+        f"*{category}*\n\n"
         "Выберите специалиста для подробной информации:",
-        reply_markup=get_specialists_in_category(category),
+        reply_markup=get_specialists_in_category(specialists),
         parse_mode="Markdown"
     )
     await state.set_state(FindSpecialist.viewing_specialists)
-    await callback.answer()
 
 
 # ============ ПРОСМОТР ИНФОРМАЦИИ О СПЕЦИАЛИСТЕ ============
 
-@router.callback_query(FindSpecialist.viewing_specialists, F.data.startswith("spec_"))
-async def show_specialist_info(callback: CallbackQuery, state: FSMContext):
+@router.message(FindSpecialist.viewing_specialists, F.text.startswith("🩺 "))
+async def show_specialist_info(message: Message, state: FSMContext):
     """Показывает информацию о специалисте"""
-    specialist_name = callback.data.replace("spec_", "")
+    specialist_name = message.text.replace("🩺 ", "")
     
     specialist_info = SPECIALISTS_DATA.get(specialist_name, {
         "description": "Информация недоступна",
@@ -205,77 +207,48 @@ async def show_specialist_info(callback: CallbackQuery, state: FSMContext):
     info_text += "Функция записи к врачу находится в разработке.\n"
     info_text += "Пока вы можете начать консультацию для получения рекомендации."
     
-    # Кнопки действий
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🩺 Начать консультацию", callback_data="start_consultation_specialist")],
-        [InlineKeyboardButton(text="🔙 К списку специалистов", callback_data="back_to_specialists")]
-    ])
-    
-    await callback.message.edit_text(
+    await message.answer(
         info_text,
-        reply_markup=keyboard,
+        reply_markup=get_specialist_actions(),
         parse_mode="Markdown"
     )
-    await callback.answer()
 
 
-@router.callback_query(F.data == "start_consultation_specialist")
-async def start_consultation_from_specialist(callback: CallbackQuery, state: FSMContext):
+@router.message(F.text == "🩺 Начать консультацию")
+async def start_consultation_from_specialist(message: Message, state: FSMContext):
     """Начинает консультацию из раздела специалистов"""
     from bot.handlers.consultation import start_consultation
     
-    await callback.message.delete()
     await state.clear()
-    
-    # Имитируем сообщение для запуска консультации
-    fake_message = callback.message
-    fake_message.text = "🩺 Новая консультация"
-    
-    await start_consultation(fake_message, state)
-    await callback.answer()
+    await start_consultation(message, state)
 
 
 # ============ НАВИГАЦИЯ ============
 
-@router.callback_query(F.data == "back_to_specialists")
-async def back_to_specialists_list(callback: CallbackQuery, state: FSMContext):
+@router.message(F.text == "🔙 К списку специалистов")
+async def back_to_specialists_list(message: Message, state: FSMContext):
     """Возврат к списку специалистов в категории"""
     data = await state.get_data()
-    category = data.get('current_category', 'cardio')
+    category = data.get('current_category', '❤️ Сердце и сосуды')
     
-    category_names = {
-        "cardio": "❤️ Сердце и сосуды",
-        "neuro": "🧠 Нервная система",
-        "gastro": "🍽 Пищеварение",
-        "endo": "💊 Гормоны и обмен веществ",
-        "pulmo": "🫁 Дыхательная система",
-        "ortho": "🦴 Опорно-двигательный аппарат",
-        "sense": "👁 Зрение и слух",
-        "derm": "🧬 Кожа и аллергия",
-        "repro": "👶 Женское и мужское здоровье",
-        "other": "🩺 Другие специалисты"
-    }
+    specialists = CATEGORY_SPECIALISTS[category]
     
-    await callback.message.edit_text(
-        f"*{category_names.get(category, 'Специалисты')}*\n\n"
+    await message.answer(
+        f"*{category}*\n\n"
         "Выберите специалиста для подробной информации:",
-        reply_markup=get_specialists_in_category(category),
+        reply_markup=get_specialists_in_category(specialists),
         parse_mode="Markdown"
     )
     await state.set_state(FindSpecialist.viewing_specialists)
-    await callback.answer()
 
 
-@router.callback_query(F.data == "back_to_categories")
-async def back_to_categories(callback: CallbackQuery, state: FSMContext):
+@router.message(F.text == "🔙 К категориям")
+async def back_to_categories(message: Message, state: FSMContext):
     """Возврат к категориям специалистов"""
-    await callback.message.edit_text(
+    await message.answer(
         "🔍 *Найти специалиста*\n\n"
         "Выберите категорию:",
         reply_markup=get_specialist_categories(),
         parse_mode="Markdown"
     )
     await state.set_state(FindSpecialist.choosing_category)
-    await callback.answer()
