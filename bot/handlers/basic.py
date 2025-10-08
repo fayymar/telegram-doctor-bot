@@ -24,14 +24,14 @@ async def cmd_start(message: Message, state: FSMContext):
         if response.data:
             # Пользователь уже зарегистрирован
             await message.answer(
-                f"👋 С возвращением, {message.from_user.first_name}!\n\n"
+                f"👋 С возвращением!\n\n"
                 "Выберите действие:",
                 reply_markup=get_main_menu()
             )
         else:
             # Новый пользователь - начинаем регистрацию
             await message.answer(
-                f"👋 Добро пожаловать, {message.from_user.first_name}!\n\n"
+                f"👋 Добро пожаловать!\n\n"
                 "🩺 *Telegram Medical Bot*\n\n"
                 "Я помогу вам:\n"
                 "• Определить нужного специалиста\n"
