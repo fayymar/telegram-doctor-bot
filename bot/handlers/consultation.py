@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from bot.states import Consultation
 from bot.keyboards import (
     get_main_menu,
+    get_symptoms_input_keyboard,
     get_symptoms_confirmation,
     get_duration_keyboard,
     get_additional_symptoms_keyboard,
@@ -91,9 +92,8 @@ async def start_consultation(message: Message, state: FSMContext):
         "📝 *Этап 1 из 4*\n\n"
         "Опишите ваши симптомы максимально подробно.\n"
         "Что вас беспокоит? Какие ощущения?\n\n"
-        "💡 Вы можете отправить текст или голосовое сообщение.\n\n"
-        "❌ Для отмены используйте /cancel",
-        reply_markup=get_symptoms_confirmation(),
+        "💡 Вы можете отправить текст или голосовое сообщение.",
+        reply_markup=get_symptoms_input_keyboard(),
         parse_mode="Markdown"
     )
     
@@ -127,13 +127,16 @@ async def process_symptoms_text(message: Message, state: FSMContext):
         )
         return
     
-    clean_symptoms = validation['symptoms'] if validation['symptoms'] else symptoms_text
+    # ОКУЛЬТУРИВАНИЕ СИМПТОМОВ
+    await message.answer("✍️ Улучшаю формулировку...")
     
-    await state.update_data(main_symptoms=clean_symptoms)
+    improved_symptoms = ai_service.improve_symptoms_text(symptoms_text)
+    
+    await state.update_data(main_symptoms=improved_symptoms)
     
     await message.answer(
         f"📝 *Ваши симптомы:*\n\n"
-        f"{clean_symptoms}\n\n"
+        f"{improved_symptoms}\n\n"
         f"Подтвердите или добавьте детали:",
         reply_markup=get_symptoms_confirmation(),
         parse_mode="Markdown"
@@ -156,8 +159,10 @@ async def process_symptoms_voice(message: Message, state: FSMContext):
 @router.message(Consultation.confirming_symptoms, F.text == "✅ Подтвердить")
 async def confirm_symptoms(message: Message, state: FSMContext):
     """Подтверждение симптомов"""
+    await message.answer("✅ Симптомы подтверждены")
+    
+    # ОТДЕЛЬНОЕ сообщение для вопроса о давности
     await message.answer(
-        "✅ Симптомы подтверждены\n\n"
         "📅 *Этап 2 из 4*\n\n"
         "Как давно вас беспокоят эти симптомы?",
         reply_markup=get_duration_keyboard(),
@@ -172,7 +177,7 @@ async def add_more_symptoms(message: Message, state: FSMContext):
     """Добавление дополнительных деталей"""
     await message.answer(
         "📝 Добавьте дополнительные детали к описанию симптомов:",
-        reply_markup=get_symptoms_confirmation()
+        reply_markup=get_symptoms_input_keyboard()
     )
     
     await state.set_state(Consultation.waiting_for_symptoms)
@@ -184,13 +189,29 @@ async def restart_symptoms(message: Message, state: FSMContext):
     await message.answer(
         "🔄 Начинаем заново\n\n"
         "Опишите ваши симптомы:",
-        reply_markup=get_symptoms_confirmation()
+        reply_markup=get_symptoms_input_keyboard()
     )
     
     await state.set_state(Consultation.waiting_for_symptoms)
 
 
 # ============ ЭТАП 2: ДАВНОСТЬ СИМПТОМОВ ============
+
+@router.message(Consultation.waiting_for_duration, F.text == "🔙 Назад")
+async def back_from_duration(message: Message, state: FSMContext):
+    """Возврат с этапа давности к подтверждению симптомов"""
+    data = await state.get_data()
+    main_symptoms = data.get('main_symptoms', '')
+    
+    await message.answer(
+        f"📝 *Ваши симптомы:*\n\n"
+        f"{main_symptoms}\n\n"
+        f"Подтвердите или добавьте детали:",
+        reply_markup=get_symptoms_confirmation(),
+        parse_mode="Markdown"
+    )
+    
+    await state.set_state(Consultation.confirming_symptoms)
 
 @router.message(Consultation.waiting_for_duration, F.text.in_([
     "⏱ Меньше 24 часов", "📅 1-3 дня", "📅 3-7 дней", "📆 Больше недели"
@@ -244,6 +265,19 @@ async def process_duration(message: Message, state: FSMContext):
 
 
 # ============ ЭТАП 3: ДОПОЛНИТЕЛЬНЫЕ СИМПТОМЫ ============
+
+@router.message(Consultation.selecting_additional_symptoms, F.text == "🔙 Назад")
+async def back_from_additional(message: Message, state: FSMContext):
+    """Возврат с этапа дополнительных симптомов к выбору давности"""
+    await message.answer(
+        "📅 *Этап 2 из 4*\n\n"
+        "Как давно вас беспокоят эти симптомы?",
+        reply_markup=get_duration_keyboard(),
+        parse_mode="Markdown"
+    )
+    
+    await state.set_state(Consultation.waiting_for_duration)
+
 
 @router.callback_query(Consultation.selecting_additional_symptoms, F.data.startswith("symptom_"))
 async def toggle_symptom(callback: CallbackQuery, state: FSMContext):
@@ -303,6 +337,20 @@ async def other_symptom(callback: CallbackQuery, state: FSMContext):
     
     await state.set_state(Consultation.waiting_for_other_symptoms)
     await callback.answer()
+
+
+@router.message(Consultation.waiting_for_other_symptoms, F.text == "🔙 Назад")
+async def back_from_other_symptom(message: Message, state: FSMContext):
+    """Возврат от ввода другого симптома к выбору"""
+    data = await state.get_data()
+    options = data.get('additional_symptoms_options', [])
+    
+    await message.answer(
+        "Выберите симптомы:",
+        reply_markup=get_additional_symptoms_keyboard(options)
+    )
+    
+    await state.set_state(Consultation.selecting_additional_symptoms)
 
 
 @router.message(Consultation.waiting_for_other_symptoms)
