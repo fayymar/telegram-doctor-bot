@@ -121,8 +121,10 @@ def get_additional_symptoms_keyboard(symptoms: list[str]) -> InlineKeyboardMarku
 
 
 def get_additional_cancel_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура для третьего этапа - только отменить"""
-    keyboard = [[KeyboardButton(text="❌ Отменить")]]
+    """Клавиатура для третьего этапа - отменить и назад"""
+    keyboard = [
+        [KeyboardButton(text="🔙 Назад"), KeyboardButton(text="❌ Отменить")]
+    ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
