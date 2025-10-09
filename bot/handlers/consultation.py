@@ -103,6 +103,16 @@ async def start_consultation(message: Message, state: FSMContext):
 
 # ============ ЭТАП 1: ОПИСАНИЕ СИМПТОМОВ ============
 
+@router.message(Consultation.waiting_for_symptoms, F.text == "❌ Отменить")
+async def cancel_from_symptoms(message: Message, state: FSMContext):
+    """Отмена на первом этапе (описание симптомов)"""
+    await state.clear()
+    await message.answer(
+        "❌ Консультация отменена",
+        reply_markup=get_main_menu()
+    )
+
+
 @router.message(Consultation.waiting_for_symptoms, F.text)
 async def process_symptoms_text(message: Message, state: FSMContext):
     """Обработка текстового описания симптомов"""
@@ -129,7 +139,7 @@ async def process_symptoms_text(message: Message, state: FSMContext):
         return
     
     # ОКУЛЬТУРИВАНИЕ СИМПТОМОВ
-    await message.answer("✍️ Улучшаю формулировку...")
+    await message.answer("✏️ Улучшаю формулировку...")
     
     improved_symptoms = ai_service.improve_symptoms_text(symptoms_text)
     
