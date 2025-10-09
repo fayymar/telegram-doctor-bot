@@ -279,35 +279,36 @@ async def back_from_additional(message: Message, state: FSMContext):
     await state.set_state(Consultation.waiting_for_duration)
 
 
-@router.callback_query(Consultation.selecting_additional_symptoms, F.data.startswith("symptom_"))
+@router.callback_query(Consultation.selecting_additional_symptoms, F.data.startswith("sym_"))
 async def toggle_symptom(callback: CallbackQuery, state: FSMContext):
     """Переключение выбора симптома"""
-    symptom = callback.data.replace("symptom_", "")
+    # Извлекаем индекс из callback_data
+    idx = int(callback.data.split("_")[1])
     
     data = await state.get_data()
     options = data.get('additional_symptoms_options', [])
     selected = data.get('selected_additional', set())
     
-    full_symptom = None
-    for opt in options:
-        if opt.startswith(symptom) or symptom in opt:
-            full_symptom = opt
-            break
-    
-    if not full_symptom:
+    # Получаем симптом по индексу
+    if idx >= len(options):
         await callback.answer("Ошибка выбора")
         return
     
-    if full_symptom in selected:
-        selected.remove(full_symptom)
+    symptom = options[idx]
+    
+    # Переключаем выбор
+    if symptom in selected:
+        selected.remove(symptom)
     else:
-        selected.add(full_symptom)
+        selected.add(symptom)
     
     await state.update_data(selected_additional=selected)
     
+    # Обновляем клавиатуру
     updated_keyboard = update_symptom_selection(
         callback.message.reply_markup,
-        selected
+        selected,
+        options  # Передаём полный список
     )
     
     await callback.message.edit_reply_markup(reply_markup=updated_keyboard)
