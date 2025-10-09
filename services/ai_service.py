@@ -192,17 +192,27 @@ class AIService:
 
         response = self._call_ai(system_prompt, user_message, temperature=0.7)
         
+        print(f"DEBUG AI: Raw response length: {len(response)}")
+        print(f"DEBUG AI: First 200 chars: {response[:200]}")
+        
         try:
             # Ищем JSON массив в ответе
             json_match = re.search(r'\[.*\]', response, re.DOTALL)
             if json_match:
+                print(f"DEBUG AI: Found JSON: {json_match.group()[:200]}")
                 symptoms = json.loads(json_match.group())
+                print(f"DEBUG AI: Parsed {len(symptoms)} symptoms")
                 # Фильтруем и очищаем симптомы
-                return self._filter_symptoms(symptoms)
+                filtered = self._filter_symptoms(symptoms)
+                print(f"DEBUG AI: After filtering: {len(filtered)} symptoms")
+                return filtered
+            else:
+                print("DEBUG AI: No JSON array found in response")
         except Exception as e:
-            print(f"JSON Parse Error: {e}")
+            print(f"DEBUG AI: JSON Parse Error: {e}")
         
         # Возвращаем пустой список если не удалось
+        print("DEBUG AI: Returning empty list")
         return []
     
     def _filter_symptoms(self, symptoms: list[str]) -> list[str]:
