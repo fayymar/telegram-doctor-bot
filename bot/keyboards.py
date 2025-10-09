@@ -67,8 +67,14 @@ def get_edit_profile_menu() -> ReplyKeyboardMarkup:
 
 # ============ КОНСУЛЬТАЦИЯ ============
 
+def get_symptoms_input_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура для ввода симптомов - ТОЛЬКО ОТМЕНИТЬ"""
+    keyboard = [[KeyboardButton(text="❌ Отменить")]]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
 def get_symptoms_confirmation() -> ReplyKeyboardMarkup:
-    """Подтверждение симптомов - ТОЛЬКО ОТМЕНИТЬ"""
+    """Подтверждение симптомов"""
     keyboard = [
         [KeyboardButton(text="✅ Подтвердить")],
         [KeyboardButton(text="➕ Добавить детали")],
@@ -79,14 +85,15 @@ def get_symptoms_confirmation() -> ReplyKeyboardMarkup:
 
 
 def get_duration_keyboard() -> ReplyKeyboardMarkup:
-    """Выбор давности симптомов (ОБЫЧНЫЕ КНОПКИ)"""
+    """Выбор давности симптомов с навигацией"""
     keyboard = [
         [KeyboardButton(text="⏱ Меньше 24 часов")],
         [KeyboardButton(text="📅 1-3 дня")],
         [KeyboardButton(text="📅 3-7 дней")],
-        [KeyboardButton(text="📆 Больше недели")]
+        [KeyboardButton(text="📆 Больше недели")],
+        [KeyboardButton(text="🔙 Назад"), KeyboardButton(text="❌ Отменить")]
     ]
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
 def get_additional_symptoms_keyboard(symptoms: list[str]) -> InlineKeyboardMarkup:
