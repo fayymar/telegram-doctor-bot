@@ -173,17 +173,6 @@ async def confirm_symptoms(message: Message, state: FSMContext):
     await state.set_state(Consultation.waiting_for_duration)
 
 
-@router.message(Consultation.confirming_symptoms, F.text == "➕ Добавить детали")
-async def add_more_symptoms(message: Message, state: FSMContext):
-    """Добавление дополнительных деталей"""
-    await message.answer(
-        "📝 Добавьте дополнительные детали к описанию симптомов:",
-        reply_markup=get_symptoms_input_keyboard()
-    )
-    
-    await state.set_state(Consultation.waiting_for_symptoms)
-
-
 @router.message(Consultation.confirming_symptoms, F.text == "🔄 Начать заново")
 async def restart_symptoms(message: Message, state: FSMContext):
     """Начать описание заново"""
