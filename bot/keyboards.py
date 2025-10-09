@@ -105,11 +105,11 @@ def get_additional_symptoms_keyboard(symptoms: list[str]) -> InlineKeyboardMarku
     """
     keyboard = []
     
-    # Добавляем симптомы (максимум 10)
-    for symptom in symptoms[:10]:
+    # Добавляем симптомы с ИНДЕКСАМИ (максимум 10)
+    for idx, symptom in enumerate(symptoms[:10]):
         keyboard.append([InlineKeyboardButton(
             text=f"◻️ {symptom}", 
-            callback_data=f"symptom_{symptom[:50]}"
+            callback_data=f"sym_{idx}"  # КОРОТКИЙ callback!
         )])
     
     # Служебные кнопки
@@ -128,22 +128,36 @@ def get_additional_cancel_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def update_symptom_selection(keyboard: InlineKeyboardMarkup, selected: set) -> InlineKeyboardMarkup:
+def get_manual_symptoms_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура для ручного ввода симптомов"""
+    keyboard = [
+        [KeyboardButton(text="✅ Готово")],
+        [KeyboardButton(text="🔙 Назад"), KeyboardButton(text="❌ Отменить")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def update_symptom_selection(keyboard: InlineKeyboardMarkup, selected: set, symptoms: list[str]) -> InlineKeyboardMarkup:
     """
     Обновляет состояние кнопок (отмечает выбранные)
     
     Args:
         keyboard: Текущая клавиатура
-        selected: Множество выбранных симптомов
+        selected: Множество выбранных симптомов (текст)
+        symptoms: Полный список симптомов для сопоставления с индексами
     """
     new_keyboard = []
     
     for row in keyboard.inline_keyboard:
         new_row = []
         for button in row:
-            # Проверяем, выбран ли симптом
-            if button.callback_data.startswith("symptom_"):
-                symptom = button.text.replace("◻️ ", "").replace("✅ ", "")
+            # Проверяем, это кнопка симптома или нет
+            if button.callback_data.startswith("sym_"):
+                # Извлекаем индекс
+                idx = int(button.callback_data.split("_")[1])
+                symptom = symptoms[idx]
+                
+                # Проверяем, выбран ли
                 if symptom in selected:
                     new_button = InlineKeyboardButton(
                         text=f"✅ {symptom}",
@@ -156,6 +170,7 @@ def update_symptom_selection(keyboard: InlineKeyboardMarkup, selected: set) -> I
                     )
                 new_row.append(new_button)
             else:
+                # Служебная кнопка - не меняем
                 new_row.append(button)
         new_keyboard.append(new_row)
     
