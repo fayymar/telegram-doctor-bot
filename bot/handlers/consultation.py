@@ -256,6 +256,7 @@ async def process_duration(message: Message, state: FSMContext):
         parse_mode="Markdown"
     )
     
+    # ВАЖНО: Второе сообщение с инлайн-кнопками!
     await message.answer(
         "Выберите симптомы:",
         reply_markup=get_additional_symptoms_keyboard(additional_symptoms)
