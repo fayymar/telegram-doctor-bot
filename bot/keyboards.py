@@ -77,7 +77,6 @@ def get_symptoms_confirmation() -> ReplyKeyboardMarkup:
     """Подтверждение симптомов"""
     keyboard = [
         [KeyboardButton(text="✅ Подтвердить")],
-        [KeyboardButton(text="➕ Добавить детали")],
         [KeyboardButton(text="🔄 Начать заново")],
         [KeyboardButton(text="❌ Отменить")]
     ]
