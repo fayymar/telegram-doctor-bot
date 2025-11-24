@@ -150,6 +150,51 @@ async def back_to_main_from_profile(message: Message, state: FSMContext):
     )
 
 
+@router.message(F.text == "📊 Показать ИМТ")
+async def show_bmi(message: Message):
+    """Показать расчет ИМТ"""
+    try:
+        from utils.health_calculator import format_bmi_info
+
+        response = supabase_client.table('user_profiles').select('*').eq('user_id', message.from_user.id).execute()
+
+        if not response.data:
+            await message.answer(
+                "❌ Профиль не найден.\nИспользуйте /start для регистрации"
+            )
+            return
+
+        profile = response.data[0]
+        weight = profile.get('weight')
+        height = profile.get('height')
+        gender = profile.get('gender')
+
+        # Проверяем наличие данных
+        if not weight or not height:
+            await message.answer(
+                "❌ Для расчета ИМТ необходимо указать рост и вес\n\n"
+                "Пожалуйста, заполните ваш профиль полностью.",
+                reply_markup=get_profile_menu()
+            )
+            return
+
+        # Рассчитываем и форматируем ИМТ
+        bmi_info = format_bmi_info(float(weight), int(height), gender)
+
+        await message.answer(
+            bmi_info,
+            reply_markup=get_profile_menu(),
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        logger.error(f"Error in show_bmi: {e}", exc_info=True)
+        await message.answer(
+            "❌ Ошибка при расчете ИМТ",
+            reply_markup=get_profile_menu()
+        )
+
+
 # ============ ЭТАП 1: ФИО ============
 
 @router.message(Registration.waiting_for_full_name, F.text)

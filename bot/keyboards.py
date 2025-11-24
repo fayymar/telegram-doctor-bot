@@ -48,6 +48,7 @@ def get_cancel_keyboard() -> ReplyKeyboardMarkup:
 def get_profile_menu() -> ReplyKeyboardMarkup:
     """Меню профиля (ОБЫЧНЫЕ КНОПКИ)"""
     keyboard = [
+        [KeyboardButton(text="📊 Показать ИМТ")],
         [KeyboardButton(text="✏️ Изменить данные")],
         [KeyboardButton(text="🔙 В главное меню")]
     ]
