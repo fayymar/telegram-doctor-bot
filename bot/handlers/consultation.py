@@ -27,6 +27,47 @@ ai_service = AIService()
 
 # ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
 
+def format_symptoms_with_bullets(text: str) -> str:
+    """
+    Форматирует текст симптомов с маркерами
+
+    Разбивает текст на предложения и форматирует каждое с маркером.
+    Предложения могут быть разделены точкой, запятой или новой строкой.
+
+    Args:
+        text: Исходный текст симптомов
+
+    Returns:
+        Отформатированный текст с маркерами
+    """
+    if not text or text == 'не указано':
+        return text
+
+    # Разбиваем по точкам, но сохраняем точки после сокращений (см, кг и т.д.)
+    import re
+
+    # Заменяем точки после сокращений на временный маркер
+    text = re.sub(r'\b(см|кг|мм|гр|мл|др|т\.д|т\.п)\.\s*', r'\1__TEMP_DOT__ ', text)
+
+    # Разбиваем на предложения по точкам и переносам строк
+    sentences = []
+    for part in text.split('\n'):
+        sentences.extend([s.strip() for s in part.split('.') if s.strip()])
+
+    # Возвращаем точки после сокращений
+    sentences = [s.replace('__TEMP_DOT__', '.') for s in sentences]
+
+    # Убираем пустые строки и дубликаты
+    sentences = [s for s in sentences if s and len(s) > 2]
+
+    # Если получилось одно предложение - возвращаем с одним маркером
+    if len(sentences) == 1:
+        return f"• {sentences[0]}"
+
+    # Если несколько - форматируем каждое
+    return '\n'.join([f"• {s}" for s in sentences])
+
+
 async def get_user_profile(user_id: int) -> dict:
     """Получает профиль пользователя для AI"""
     try:
@@ -143,12 +184,15 @@ async def process_symptoms_text(message: Message, state: FSMContext):
     await message.answer("✏️ Улучшаю формулировку...")
     
     improved_symptoms = ai_service.improve_symptoms_text(symptoms_text)
-    
+
     await state.update_data(main_symptoms=improved_symptoms)
-    
+
+    # Форматируем симптомы с маркерами
+    formatted_symptoms = format_symptoms_with_bullets(improved_symptoms)
+
     await message.answer(
         f"📝 *Ваши симптомы:*\n\n"
-        f"{improved_symptoms}\n\n"
+        f"{formatted_symptoms}\n\n"
         f"Подтвердите или добавьте детали:",
         reply_markup=get_symptoms_confirmation(),
         parse_mode="Markdown"
@@ -203,15 +247,18 @@ async def back_from_duration(message: Message, state: FSMContext):
     """Возврат с этапа давности к подтверждению симптомов"""
     data = await state.get_data()
     main_symptoms = data.get('main_symptoms', '')
-    
+
+    # Форматируем симптомы с маркерами
+    formatted_symptoms = format_symptoms_with_bullets(main_symptoms)
+
     await message.answer(
         f"📝 *Ваши симптомы:*\n\n"
-        f"{main_symptoms}\n\n"
+        f"{formatted_symptoms}\n\n"
         f"Подтвердите или добавьте детали:",
         reply_markup=get_symptoms_confirmation(),
         parse_mode="Markdown"
     )
-    
+
     await state.set_state(Consultation.confirming_symptoms)
 
 @router.message(Consultation.waiting_for_duration, F.text.in_([
@@ -466,13 +513,16 @@ async def done_additional_symptoms(callback: CallbackQuery, state: FSMContext):
 async def show_final_confirmation(message: Message, state: FSMContext):
     """Показывает финальное подтверждение с полным анамнезом"""
     data = await state.get_data()
-    
+
     main_symptoms = data.get('main_symptoms', 'не указано')
     duration = data.get('duration', 'не указано')
     additional = data.get('selected_additional', set())
-    
+
+    # Форматируем основные симптомы с маркерами
+    formatted_main = format_symptoms_with_bullets(main_symptoms)
+
     anamnesis = f"📋 *Финальное подтверждение*\n\n"
-    anamnesis += f"*Основные симптомы:*\n{main_symptoms}\n\n"
+    anamnesis += f"*Основные симптомы:*\n{formatted_main}\n\n"
     anamnesis += f"*Давность:* {duration}\n\n"
     
     if additional:
