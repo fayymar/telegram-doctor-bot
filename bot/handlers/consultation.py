@@ -593,27 +593,12 @@ async def final_confirm(message: Message, state: FSMContext):
 
     # Добавляем каждого специалиста с процентом
     for idx, spec in enumerate(recommendation['specialists'][:5], 1):
-        # Эмодзи для топ-3
-        medal = ""
-        if idx == 1:
-            medal = "🥇 "
-        elif idx == 2:
-            medal = "🥈 "
-        elif idx == 3:
-            medal = "🥉 "
-
-        # Визуальный индикатор процента
         percent = spec['match_percent']
-        bar_length = 10
-        filled = int((percent / 100) * bar_length)
-        bar = "█" * filled + "░" * (bar_length - filled)
-
-        result_text += f"{medal}*{idx}. {spec['name']}* — {percent}%\n"
-        result_text += f"{bar}\n"
+        result_text += f"*{idx}. {spec['name']}* — вероятность {percent}%\n"
         result_text += f"_{spec['reason']}_\n\n"
 
     # Добавляем срочность
-    result_text += f"\n{urgency_emoji.get(recommendation['urgency'], '📋')} *Срочность:* "
+    result_text += f"{urgency_emoji.get(recommendation['urgency'], '📋')} *Срочность:* "
     result_text += f"{urgency_text.get(recommendation['urgency'], 'Средняя')}\n"
     result_text += f"_{recommendation.get('urgency_reason', 'Рекомендуется консультация.')}_"
 
