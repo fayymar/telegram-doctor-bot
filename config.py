@@ -1,8 +1,11 @@
 import os
 from dotenv import load_dotenv
+from utils.logger import setup_logger
 
 # Загружаем переменные из .env файла (для локальной разработки)
 load_dotenv()
+
+logger = setup_logger(__name__)
 
 # Telegram Bot Token
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -25,8 +28,11 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 PORT = int(os.getenv("PORT", 8080))
 
-print("✅ Configuration loaded successfully")
-print(f"   - Bot token: {'*' * 10}{BOT_TOKEN[-10:]}")
-print(f"   - Groq API: {'*' * 10}{GROQ_API_KEY[-10:]}")
-print(f"   - Supabase: {SUPABASE_URL}")
-print(f"   - Port: {PORT}")
+# FSM Timeout (в секундах)
+FSM_TIMEOUT = int(os.getenv("FSM_TIMEOUT", 1800))  # 30 минут по умолчанию
+
+logger.info("✅ Configuration loaded successfully")
+logger.info(f"   - Supabase URL: {SUPABASE_URL}")
+logger.info(f"   - Port: {PORT}")
+logger.info(f"   - Debug mode: {DEBUG}")
+logger.info(f"   - FSM timeout: {FSM_TIMEOUT}s")

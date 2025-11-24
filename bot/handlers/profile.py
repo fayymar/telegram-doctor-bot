@@ -14,12 +14,54 @@ from bot.keyboards import (
 )
 from database.connection import supabase_client
 from services.phone_formatter import format_phone_number, get_phone_info
+from utils.logger import setup_logger
 
-
+logger = setup_logger(__name__)
 router = Router()
 
 
 # ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
+
+async def process_phone_input(message: Message, phone_input: str) -> tuple[bool, str]:
+    """
+    Обрабатывает ввод телефона и отправляет результат пользователю
+
+    Args:
+        message: Сообщение пользователя
+        phone_input: Введенный номер телефона
+
+    Returns:
+        (success, formatted_phone): Успех и отформатированный номер
+    """
+    # Форматируем номер
+    success, formatted_phone, error = format_phone_number(phone_input)
+
+    if not success:
+        await message.answer(
+            f"{error}\n\n"
+            "Примеры правильных форматов:\n"
+            "• +998 90 123 45 67 (Узбекистан)\n"
+            "• +7 900 123 45 67 (Россия)\n"
+            "• +1 555 123 4567 (США)\n"
+            "• 90 123 45 67 (для Узбекистана)\n\n"
+            "Или нажмите кнопку 📱 Поделиться номером"
+        )
+        return False, ""
+
+    # Получаем дополнительную информацию
+    phone_info = get_phone_info(phone_input)
+
+    # Красиво показываем сохранённый номер
+    info_text = f"✅ *Телефон сохранён:*\n\n"
+    info_text += f"📱 {formatted_phone}\n"
+    if phone_info.get('valid'):
+        info_text += f"🌍 {phone_info.get('country_name')} ({phone_info.get('country_code')})\n"
+        info_text += f"📞 Тип: {phone_info.get('number_type')}"
+
+    await message.answer(info_text, reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
+
+    return True, formatted_phone
+
 
 def parse_date(date_string: str) -> datetime:
     """
@@ -94,7 +136,7 @@ async def show_profile(message: Message):
         )
         
     except Exception as e:
-        print(f"DB Error: {e}")
+        logger.error(f"DB Error in show_profile: {e}")
         await message.answer("❌ Ошибка при загрузке профиля")
 
 
@@ -158,33 +200,13 @@ async def process_full_name(message: Message, state: FSMContext):
 async def process_phone_contact(message: Message, state: FSMContext):
     """Обработка номера через кнопку 'Поделиться номером'"""
     phone = message.contact.phone_number
-    
-    # Форматируем номер
-    success, formatted_phone, error = format_phone_number(phone)
-    
+
+    success, formatted_phone = await process_phone_input(message, phone)
+
     if not success:
-        await message.answer(
-            f"{error}\n\n"
-            "Попробуйте ввести номер вручную в формате:\n"
-            "• +998 90 123 45 67 (Узбекистан)\n"
-            "• +7 900 123 45 67 (Россия)\n"
-            "• +1 555 123 4567 (США)"
-        )
         return
-    
-    # Получаем дополнительную информацию
-    phone_info = get_phone_info(phone)
-    
+
     await state.update_data(phone=formatted_phone)
-    
-    # Красиво показываем сохранённый номер
-    info_text = f"✅ *Телефон сохранён:*\n\n"
-    info_text += f"📱 {formatted_phone}\n"
-    if phone_info.get('valid'):
-        info_text += f"🌍 {phone_info.get('country_name')} ({phone_info.get('country_code')})\n"
-        info_text += f"📞 Тип: {phone_info.get('number_type')}"
-    
-    await message.answer(info_text, reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
     
     # Переход к следующему этапу
     await message.answer(
@@ -203,35 +225,13 @@ async def process_phone_contact(message: Message, state: FSMContext):
 async def process_phone_text(message: Message, state: FSMContext):
     """Обработка номера введённого текстом"""
     phone_input = message.text.strip()
-    
-    # Форматируем номер
-    success, formatted_phone, error = format_phone_number(phone_input)
-    
+
+    success, formatted_phone = await process_phone_input(message, phone_input)
+
     if not success:
-        await message.answer(
-            f"{error}\n\n"
-            "Примеры правильных форматов:\n"
-            "• +998 90 123 45 67 (Узбекистан)\n"
-            "• +7 900 123 45 67 (Россия)\n"
-            "• +1 555 123 4567 (США)\n"
-            "• 90 123 45 67 (для Узбекистана)\n\n"
-            "Или нажмите кнопку 📱 Поделиться номером"
-        )
         return
-    
-    # Получаем дополнительную информацию
-    phone_info = get_phone_info(phone_input)
-    
+
     await state.update_data(phone=formatted_phone)
-    
-    # Красиво показываем сохранённый номер
-    info_text = f"✅ *Телефон сохранён:*\n\n"
-    info_text += f"📱 {formatted_phone}\n"
-    if phone_info.get('valid'):
-        info_text += f"🌍 {phone_info.get('country_name')} ({phone_info.get('country_code')})\n"
-        info_text += f"📞 Тип: {phone_info.get('number_type')}"
-    
-    await message.answer(info_text, reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
     
     # Переход к следующему этапу
     await message.answer(
@@ -398,7 +398,7 @@ async def process_weight(message: Message, state: FSMContext):
             await state.clear()
             
         except Exception as e:
-            print(f"DB Error: {e}")
+            logger.error(f"DB Error: {e}")
             await message.answer(
                 "❌ Ошибка при сохранении профиля\n"
                 "Попробуйте ещё раз: /start"
@@ -561,7 +561,7 @@ async def edit_phone(message: Message, state: FSMContext):
         await state.set_state(EditProfile.choosing_field)
         
     except Exception as e:
-        print(f"DB Error: {e}")
+        logger.error(f"DB Error in edit_phone: {e}")
         await message.answer("❌ Ошибка при сохранении телефона")
 
 
