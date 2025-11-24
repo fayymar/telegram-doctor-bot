@@ -13,6 +13,7 @@ def get_main_menu() -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text="🩺 Новая консультация")],
         [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="📋 История")],
+        [KeyboardButton(text="💊 Лекарства"), KeyboardButton(text="💾 Экспорт анамнеза")],
         [KeyboardButton(text="🔍 Найти специалиста")],
         [KeyboardButton(text="ℹ️ Помощь")]
     ]

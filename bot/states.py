@@ -43,3 +43,21 @@ class FindSpecialist(StatesGroup):
     """Состояния для поиска специалиста"""
     choosing_category = State()
     viewing_specialists = State()
+
+
+class ViewHistory(StatesGroup):
+    """Состояния для просмотра истории"""
+    viewing_list = State()  # Просмотр списка консультаций
+    viewing_details = State()  # Просмотр деталей конкретной консультации
+
+
+class MedicationReminder(StatesGroup):
+    """Состояния для напоминаний о лекарствах"""
+    waiting_for_medication_name = State()
+    waiting_for_dosage = State()
+    waiting_for_frequency = State()
+    waiting_for_times = State()
+    waiting_for_start_date = State()
+    waiting_for_end_date = State()
+    waiting_for_notes = State()
+    confirming = State()

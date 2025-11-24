@@ -109,15 +109,4 @@ async def help_button(message: Message):
     await cmd_help(message)
 
 
-@router.message(F.text == "📋 История")
-async def history_button(message: Message):
-    """Обработчик кнопки История (заглушка)"""
-    await message.answer(
-        "📋 *История консультаций*\n\n"
-        "⏳ Функция находится в разработке.\n\n"
-        "Скоро вы сможете:\n"
-        "• Просматривать прошлые консультации\n"
-        "• Фильтровать по датам и специалистам\n"
-        "• Экспортировать анамнез в PDF",
-        parse_mode="Markdown"
-    )
+# История консультаций теперь обрабатывается в отдельном модуле bot/handlers/history.py
