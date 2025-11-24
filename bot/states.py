@@ -61,3 +61,16 @@ class MedicationReminder(StatesGroup):
     waiting_for_end_date = State()
     waiting_for_notes = State()
     confirming = State()
+
+
+class HealthDiary(StatesGroup):
+    """Состояния для дневника здоровья"""
+    choosing_metrics = State()
+    waiting_for_temperature = State()
+    waiting_for_blood_pressure = State()
+    waiting_for_pulse = State()
+    waiting_for_weight = State()
+    waiting_for_symptoms = State()
+    waiting_for_mood = State()
+    waiting_for_notes = State()
+    confirming = State()
