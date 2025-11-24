@@ -289,7 +289,7 @@ class AIService:
                         additional_symptoms: list[str],
                         user_profile: dict) -> dict:
         """
-        Рекомендует врача и уровень срочности
+        Рекомендует врачей с рейтингом соответствия
 
         Args:
             main_symptoms: Основные симптомы
@@ -299,9 +299,16 @@ class AIService:
 
         Returns:
             {
-                'specialist': 'Название специалиста',
+                'specialists': [
+                    {
+                        'name': 'Название специалиста',
+                        'match_percent': 95,
+                        'reason': 'Почему подходит'
+                    },
+                    ...
+                ],
                 'urgency': 'low'|'medium'|'high'|'emergency',
-                'reasoning': 'Обоснование'
+                'urgency_reason': 'Обоснование срочности'
             }
         """
         # Список доступных специалистов
@@ -314,9 +321,10 @@ class AIService:
         ]
 
         system_prompt = f"""Ты опытный врач-терапевт. На основе симптомов пациента:
-1. Определи наиболее подходящего специалиста из списка
-2. Оцени уровень срочности обращения
-3. Кратко объясни почему
+1. Определи ТОП-5 наиболее подходящих специалистов из списка
+2. Для каждого укажи процент соответствия симптомам (0-100%)
+3. Кратко объясни, почему каждый специалист подходит
+4. Оцени общий уровень срочности обращения
 
 ДОСТУПНЫЕ СПЕЦИАЛИСТЫ:
 {', '.join(specialists)}
@@ -327,11 +335,28 @@ class AIService:
 - medium: Обратиться в течение недели
 - low: Плановый прием
 
+ВАЖНО:
+- Процент соответствия должен быть реалистичным (не все 90-100%)
+- Первый специалист должен иметь самый высокий процент
+- Список отсортирован по убыванию процента
+- Укажи минимум 3, максимум 5 специалистов
+
 Ответь СТРОГО в JSON формате:
 {{
-    "specialist": "Название специалиста из списка",
+    "specialists": [
+        {{
+            "name": "Название специалиста из списка",
+            "match_percent": 95,
+            "reason": "Краткая причина (1-2 предложения)"
+        }},
+        {{
+            "name": "Второй специалист",
+            "match_percent": 75,
+            "reason": "Краткая причина"
+        }}
+    ],
     "urgency": "emergency/high/medium/low",
-    "reasoning": "Краткое обоснование (2-3 предложения)"
+    "urgency_reason": "Почему такая срочность (1-2 предложения)"
 }}"""
 
         # Формируем данные пациента
@@ -350,51 +375,98 @@ class AIService:
 ДОПОЛНИТЕЛЬНЫЕ СИМПТОМЫ:
 {', '.join(additional_symptoms) if additional_symptoms else 'нет'}
 
-Определи специалиста и срочность."""
+Определи топ-5 специалистов с процентами и срочность."""
 
         try:
             response = self._call_ai(system_prompt, user_message, temperature=0.3)
 
             # Используем безопасный парсер
             result = safe_parse_json_object(response, default={
-                'specialist': 'Терапевт',
+                'specialists': [
+                    {
+                        'name': 'Терапевт',
+                        'match_percent': 80,
+                        'reason': 'Рекомендуется для первичного осмотра и определения дальнейшей тактики лечения.'
+                    }
+                ],
                 'urgency': 'medium',
-                'reasoning': 'Рекомендуется консультация терапевта для первичного осмотра.'
+                'urgency_reason': 'Рекомендуется консультация в ближайшее время.'
             })
 
             # Валидируем структуру
-            if not validate_json_structure(result, ['specialist', 'urgency', 'reasoning']):
+            if not validate_json_structure(result, ['specialists', 'urgency']):
                 logger.warning("AI returned incomplete doctor recommendation")
                 return {
-                    'specialist': 'Терапевт',
+                    'specialists': [
+                        {
+                            'name': 'Терапевт',
+                            'match_percent': 80,
+                            'reason': 'Рекомендуется для первичного осмотра.'
+                        }
+                    ],
                     'urgency': 'medium',
-                    'reasoning': 'Рекомендуется консультация терапевта для первичного осмотра.'
+                    'urgency_reason': 'Рекомендуется консультация в ближайшее время.'
                 }
 
-            # Проверяем что специалист из списка
-            specialist = result.get('specialist', 'Терапевт')
-            if specialist not in specialists:
-                logger.warning(f"AI recommended unknown specialist: {specialist}")
-                specialist = 'Терапевт'
+            # Валидируем и фильтруем специалистов
+            valid_specialists = []
+            for spec in result.get('specialists', [])[:5]:  # Максимум 5
+                if not isinstance(spec, dict):
+                    continue
 
-            # Проверяем что urgency корректный
+                name = spec.get('name', 'Терапевт')
+                # Проверяем что специалист из списка
+                if name not in specialists:
+                    logger.warning(f"AI recommended unknown specialist: {name}")
+                    continue
+
+                match_percent = spec.get('match_percent', 50)
+                # Проверяем что процент в диапазоне 0-100
+                if not isinstance(match_percent, (int, float)) or match_percent < 0 or match_percent > 100:
+                    logger.warning(f"Invalid match_percent: {match_percent}")
+                    match_percent = 50
+
+                valid_specialists.append({
+                    'name': name,
+                    'match_percent': int(match_percent),
+                    'reason': spec.get('reason', 'Рекомендуется консультация.')
+                })
+
+            # Если нет валидных специалистов, добавляем терапевта
+            if not valid_specialists:
+                valid_specialists = [{
+                    'name': 'Терапевт',
+                    'match_percent': 80,
+                    'reason': 'Рекомендуется для первичного осмотра.'
+                }]
+
+            # Сортируем по убыванию процента
+            valid_specialists.sort(key=lambda x: x['match_percent'], reverse=True)
+
+            # Проверяем urgency
             urgency = result.get('urgency', 'medium')
             if urgency not in ['emergency', 'high', 'medium', 'low']:
                 logger.warning(f"AI returned invalid urgency: {urgency}")
                 urgency = 'medium'
 
-            logger.info(f"Recommended {specialist} with urgency {urgency}")
+            logger.info(f"Recommended {len(valid_specialists)} specialists, top: {valid_specialists[0]['name']} ({valid_specialists[0]['match_percent']}%)")
 
             return {
-                'specialist': specialist,
+                'specialists': valid_specialists,
                 'urgency': urgency,
-                'reasoning': result.get('reasoning', '')
+                'urgency_reason': result.get('urgency_reason', 'Рекомендуется консультация.')
             }
 
         except Exception as e:
             logger.error(f"Error in recommend_doctor: {e}")
             return {
-                'specialist': 'Терапевт',
+                'specialists': [
+                    {
+                        'name': 'Терапевт',
+                        'match_percent': 80,
+                        'reason': 'Рекомендуется для первичного осмотра.'
+                    }
+                ],
                 'urgency': 'medium',
-                'reasoning': 'Рекомендуется консультация терапевта для первичного осмотра.'
+                'urgency_reason': 'Рекомендуется консультация в ближайшее время.'
             }

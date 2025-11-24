@@ -559,7 +559,10 @@ async def final_confirm(message: Message, state: FSMContext):
         additional_symptoms=list(data.get('selected_additional', set())),
         user_profile=user_profile
     )
-    
+
+    # Сохраняем консультацию с первым (главным) специалистом
+    top_specialist = recommendation['specialists'][0]['name'] if recommendation['specialists'] else 'Терапевт'
+
     await save_consultation(message.from_user.id, {
         'symptoms': {
             'main': data.get('main_symptoms'),
@@ -567,36 +570,59 @@ async def final_confirm(message: Message, state: FSMContext):
             'additional': list(data.get('selected_additional', set()))
         },
         'questions_answers': {},
-        'specialist': recommendation['specialist'],
+        'specialist': top_specialist,
         'urgency': recommendation['urgency']
     })
-    
+
     urgency_emoji = {
         'emergency': '🚨',
         'high': '⚠️',
         'medium': '📋',
         'low': 'ℹ️'
     }
-    
+
     urgency_text = {
         'emergency': 'СРОЧНО! Требуется скорая помощь',
         'high': 'Высокая (обратиться в течение 24 часов)',
         'medium': 'Средняя (обратиться в течение недели)',
         'low': 'Низкая (плановый приём)'
     }
-    
-    result_text = f"🩺 *Рекомендация специалиста*\n\n"
-    result_text += f"*Специалист:* {recommendation['specialist']}\n\n"
-    result_text += f"{urgency_emoji.get(recommendation['urgency'], '📋')} *Срочность:* "
-    result_text += f"{urgency_text.get(recommendation['urgency'], 'Средняя')}\n\n"
-    result_text += f"*Обоснование:*\n{recommendation['reasoning']}"
-    
+
+    # Формируем результат с рейтингом специалистов
+    result_text = f"🩺 *Рекомендации специалистов*\n\n"
+
+    # Добавляем каждого специалиста с процентом
+    for idx, spec in enumerate(recommendation['specialists'][:5], 1):
+        # Эмодзи для топ-3
+        medal = ""
+        if idx == 1:
+            medal = "🥇 "
+        elif idx == 2:
+            medal = "🥈 "
+        elif idx == 3:
+            medal = "🥉 "
+
+        # Визуальный индикатор процента
+        percent = spec['match_percent']
+        bar_length = 10
+        filled = int((percent / 100) * bar_length)
+        bar = "█" * filled + "░" * (bar_length - filled)
+
+        result_text += f"{medal}*{idx}. {spec['name']}* — {percent}%\n"
+        result_text += f"{bar}\n"
+        result_text += f"_{spec['reason']}_\n\n"
+
+    # Добавляем срочность
+    result_text += f"\n{urgency_emoji.get(recommendation['urgency'], '📋')} *Срочность:* "
+    result_text += f"{urgency_text.get(recommendation['urgency'], 'Средняя')}\n"
+    result_text += f"_{recommendation.get('urgency_reason', 'Рекомендуется консультация.')}_"
+
     await message.answer(
         result_text,
         reply_markup=get_result_keyboard(),
         parse_mode="Markdown"
     )
-    
+
     await state.clear()
 
 
