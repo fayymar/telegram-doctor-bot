@@ -20,33 +20,33 @@ def get_location_keyboard() -> ReplyKeyboardMarkup:
 
 def get_clinic_search_options(lat: float, lon: float) -> InlineKeyboardMarkup:
     """Создает кнопки с вариантами поиска клиник"""
-    # Формируем URL для Google Maps с разными типами медучреждений
-    base_maps_url = f"https://www.google.com/maps/search/"
+    # Формируем URL для Яндекс.Карт с разными типами медучреждений
+    # Формат: https://yandex.ru/maps/?text=поисковый_запрос&ll=долгота,широта&z=масштаб
 
     keyboard = [
         [InlineKeyboardButton(
             text="🏥 Больницы",
-            url=f"{base_maps_url}больница/@{lat},{lon},15z"
+            url=f"https://yandex.ru/maps/?text=больница&ll={lon},{lat}&z=14"
         )],
         [InlineKeyboardButton(
             text="🏥 Поликлиники",
-            url=f"{base_maps_url}поликлиника/@{lat},{lon},15z"
+            url=f"https://yandex.ru/maps/?text=поликлиника&ll={lon},{lat}&z=14"
         )],
         [InlineKeyboardButton(
             text="💊 Аптеки",
-            url=f"{base_maps_url}аптека/@{lat},{lon},15z"
+            url=f"https://yandex.ru/maps/?text=аптека&ll={lon},{lat}&z=14"
         )],
         [InlineKeyboardButton(
             text="🚑 Скорая помощь",
-            url=f"{base_maps_url}скорая+помощь/@{lat},{lon},15z"
+            url=f"https://yandex.ru/maps/?text=скорая помощь&ll={lon},{lat}&z=14"
         )],
         [InlineKeyboardButton(
             text="👨‍⚕️ Частные клиники",
-            url=f"{base_maps_url}частная+клиника/@{lat},{lon},15z"
+            url=f"https://yandex.ru/maps/?text=частная клиника&ll={lon},{lat}&z=14"
         )],
         [InlineKeyboardButton(
             text="🦷 Стоматологии",
-            url=f"{base_maps_url}стоматология/@{lat},{lon},15z"
+            url=f"https://yandex.ru/maps/?text=стоматология&ll={lon},{lat}&z=14"
         )]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -79,7 +79,7 @@ async def process_location(message: Message):
         await message.answer(
             "✅ *Местоположение получено*\n\n"
             "📍 Выберите тип медицинского учреждения:\n\n"
-            "Откроется Google Maps с результатами поиска рядом с вами",
+            "Откроется Яндекс.Карты с результатами поиска рядом с вами",
             reply_markup=get_clinic_search_options(lat, lon),
             parse_mode="Markdown"
         )

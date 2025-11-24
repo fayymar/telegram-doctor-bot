@@ -72,6 +72,59 @@ async def process_phone_input(message: Message, phone_input: str) -> tuple[bool,
 
 # ============ РЕГИСТРАЦИЯ ============
 
+# ============ ЭТАП 0: ВЫБОР ЯЗЫКА ============
+
+@router.message(Registration.choosing_language, F.text.in_(["🇷🇺 Русский", "🇺🇿 O'zbek"]))
+async def process_language_choice(message: Message, state: FSMContext):
+    """Обработка выбора языка"""
+    from utils.i18n import t
+
+    # Определяем язык
+    lang = "ru" if message.text == "🇷🇺 Русский" else "uz"
+
+    # Сохраняем язык в state
+    await state.update_data(language=lang)
+
+    # Приветствие на выбранном языке
+    welcome_texts = {
+        "ru": (
+            "👋 Добро пожаловать!\n\n"
+            "🩺 *Telegram Medical Bot*\n\n"
+            "Я помогу вам:\n"
+            "• Определить нужного специалиста\n"
+            "• Оценить срочность обращения\n"
+            "• Записаться на приём\n\n"
+            "Для начала давайте заполним ваш профиль."
+        ),
+        "uz": (
+            "👋 Xush kelibsiz!\n\n"
+            "🩺 *Telegram Tibbiy Bot*\n\n"
+            "Men sizga yordam beraman:\n"
+            "• Kerakli mutaxassisni aniqlash\n"
+            "• Murojaat shoshilinchligini baholash\n"
+            "• Qabulga yozilish\n\n"
+            "Avval profilingizni to'ldiraylik."
+        )
+    }
+
+    name_prompts = {
+        "ru": "👤 *Как вас зовут?*\nВведите ФИО (например: Иванов Иван или Иван Петров)",
+        "uz": "👤 *Ismingiz nima?*\nTo'liq ism-familiyangizni kiriting (masalan: Ivanov Ivan)"
+    }
+
+    await message.answer(
+        welcome_texts[lang],
+        parse_mode="Markdown"
+    )
+
+    await message.answer(
+        name_prompts[lang],
+        parse_mode="Markdown"
+    )
+
+    await state.set_state(Registration.waiting_for_full_name)
+
+
 @router.message(F.text == "👤 Профиль")
 async def show_profile(message: Message):
     """Показать профиль пользователя"""
@@ -384,6 +437,8 @@ async def process_weight(message: Message, state: FSMContext):
     data = await state.get_data()
 
     try:
+        lang = data.get('language', 'ru')
+
         profile_data = {
             'user_id': message.from_user.id,
             'username': message.from_user.username,
@@ -393,16 +448,28 @@ async def process_weight(message: Message, state: FSMContext):
             'gender': data['gender'],
             'height': data['height'],
             'weight': data['weight'],
+            'language': lang,
             'created_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat()
         }
 
         supabase_client.table('user_profiles').insert(profile_data).execute()
 
+        completion_texts = {
+            "ru": (
+                "🎉 *Регистрация завершена!*\n\n"
+                "Ваш профиль успешно создан.\n"
+                "Теперь вы можете пользоваться всеми функциями бота!"
+            ),
+            "uz": (
+                "🎉 *Ro'yxatdan o'tish yakunlandi!*\n\n"
+                "Profilingiz muvaffaqiyatli yaratildi.\n"
+                "Endi siz botning barcha funksiyalaridan foydalanishingiz mumkin!"
+            )
+        }
+
         await message.answer(
-            "🎉 *Регистрация завершена!*\n\n"
-            "Ваш профиль успешно создан.\n"
-            "Теперь вы можете пользоваться всеми функциями бота!",
+            completion_texts.get(lang, completion_texts['ru']),
             reply_markup=get_main_menu(),
             parse_mode="Markdown"
         )

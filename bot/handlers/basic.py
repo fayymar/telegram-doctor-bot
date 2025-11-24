@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
@@ -12,44 +12,51 @@ logger = setup_logger(__name__)
 router = Router()
 
 
+def get_language_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура выбора языка"""
+    keyboard = [
+        [KeyboardButton(text="🇷🇺 Русский"), KeyboardButton(text="🇺🇿 O'zbek")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     """Обработчик команды /start"""
     user_id = message.from_user.id
     username = message.from_user.username
-    
+
     # Проверяем, зарегистрирован ли пользователь
     try:
         response = supabase_client.table('user_profiles').select('*').eq('user_id', user_id).execute()
-        
+
         if response.data:
             # Пользователь уже зарегистрирован
+            lang = response.data[0].get('language', 'ru')
+
+            welcome_text = {
+                'ru': "👋 С возвращением!\n\nВыберите действие:",
+                'uz': "👋 Qaytganingiz bilan!\n\nAmalni tanlang:"
+            }
+
             await message.answer(
-                f"👋 С возвращением!\n\n"
-                "Выберите действие:",
+                welcome_text.get(lang, welcome_text['ru']),
                 reply_markup=get_main_menu()
             )
         else:
-            # Новый пользователь - начинаем регистрацию
+            # Новый пользователь - выбор языка
             await message.answer(
-                f"👋 Добро пожаловать!\n\n"
-                "🩺 *Telegram Medical Bot*\n\n"
-                "Я помогу вам:\n"
-                "• Определить нужного специалиста\n"
-                "• Оценить срочность обращения\n"
-                "• Записаться на приём\n\n"
-                "Для начала давайте заполним ваш профиль.\n\n"
-                "👤 *Как вас зовут?*\n"
-                "Введите ФИО (например: Иванов Иван или Иван Петров)",
-                parse_mode="Markdown"
+                "👋 Welcome! / Добро пожаловать! / Xush kelibsiz!\n\n"
+                "🌐 Choose your language / Выберите язык / Tilni tanlang:",
+                reply_markup=get_language_keyboard()
             )
-            await state.set_state(Registration.waiting_for_full_name)
-            
+            await state.set_state(Registration.choosing_language)
+
     except Exception as e:
         logger.error(f"Database error in cmd_start for user {user_id}: {e}", exc_info=True)
         await message.answer(
-            "❌ Произошла ошибка при подключении к базе данных.\n"
-            "Попробуйте позже или обратитесь к администратору."
+            "❌ Database error / Ошибка БД / Ma'lumotlar bazasi xatosi\n"
+            "Try again later / Попробуйте позже / Keyinroq urinib ko'ring"
         )
 
 
