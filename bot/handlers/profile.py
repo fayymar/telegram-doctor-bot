@@ -15,6 +15,13 @@ from bot.keyboards import (
 from database.connection import supabase_client
 from services.phone_formatter import format_phone_number, get_phone_info
 from utils.logger import setup_logger
+from utils.validators import (
+    validate_full_name,
+    validate_birthdate,
+    validate_height,
+    validate_weight,
+    sanitize_text
+)
 
 logger = setup_logger(__name__)
 router = Router()
@@ -61,25 +68,6 @@ async def process_phone_input(message: Message, phone_input: str) -> tuple[bool,
     await message.answer(info_text, reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
 
     return True, formatted_phone
-
-
-def parse_date(date_string: str) -> datetime:
-    """
-    Парсит дату в гибких форматах
-    
-    Поддерживаемые форматы:
-    - ДД.ММ.ГГГГ (15.03.1990)
-    - ДД/ММ/ГГГГ (15/03/1990)
-    - ДД ММ ГГГГ (15 03 1990)
-    """
-    # Заменяем все разделители на точку
-    normalized = date_string.replace("/", ".").replace(" ", ".")
-    
-    # Пробуем распарсить
-    try:
-        return datetime.strptime(normalized, "%d.%m.%Y")
-    except ValueError:
-        raise ValueError("Неверный формат даты")
 
 
 # ============ РЕГИСТРАЦИЯ ============
@@ -150,26 +138,64 @@ async def back_to_main_from_profile(message: Message, state: FSMContext):
     )
 
 
+@router.message(F.text == "📊 Показать ИМТ")
+async def show_bmi(message: Message):
+    """Показать расчет ИМТ"""
+    try:
+        from utils.health_calculator import format_bmi_info
+
+        response = supabase_client.table('user_profiles').select('*').eq('user_id', message.from_user.id).execute()
+
+        if not response.data:
+            await message.answer(
+                "❌ Профиль не найден.\nИспользуйте /start для регистрации"
+            )
+            return
+
+        profile = response.data[0]
+        weight = profile.get('weight')
+        height = profile.get('height')
+        gender = profile.get('gender')
+
+        # Проверяем наличие данных
+        if not weight or not height:
+            await message.answer(
+                "❌ Для расчета ИМТ необходимо указать рост и вес\n\n"
+                "Пожалуйста, заполните ваш профиль полностью.",
+                reply_markup=get_profile_menu()
+            )
+            return
+
+        # Рассчитываем и форматируем ИМТ
+        bmi_info = format_bmi_info(float(weight), int(height), gender)
+
+        await message.answer(
+            bmi_info,
+            reply_markup=get_profile_menu(),
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        logger.error(f"Error in show_bmi: {e}", exc_info=True)
+        await message.answer(
+            "❌ Ошибка при расчете ИМТ",
+            reply_markup=get_profile_menu()
+        )
+
+
 # ============ ЭТАП 1: ФИО ============
 
 @router.message(Registration.waiting_for_full_name, F.text)
 async def process_full_name(message: Message, state: FSMContext):
     """Обработка ФИО"""
-    full_name = message.text.strip()
-    
-    # Базовая валидация
-    if len(full_name) < 3:
-        await message.answer("❌ ФИО слишком короткое. Попробуйте ещё раз:")
+    full_name = sanitize_text(message.text)
+
+    # Валидация ФИО
+    is_valid, error_message = validate_full_name(full_name)
+    if not is_valid:
+        await message.answer(error_message)
         return
-    
-    # Проверка на минимум 2 слова
-    if len(full_name.split()) < 2:
-        await message.answer(
-            "❌ Пожалуйста, укажите хотя бы Фамилию и Имя\n"
-            "Например: Иванов Иван"
-        )
-        return
-    
+
     await state.update_data(full_name=full_name)
     
     await message.answer(
@@ -251,44 +277,31 @@ async def process_phone_text(message: Message, state: FSMContext):
 @router.message(Registration.waiting_for_birthdate, F.text)
 async def process_birthdate(message: Message, state: FSMContext):
     """Обработка даты рождения"""
-    date_string = message.text.strip()
-    
-    try:
-        birthdate = parse_date(date_string)
-        
-        # Проверка на адекватность даты
-        if birthdate > datetime.now():
-            await message.answer("❌ Дата рождения не может быть в будущем")
-            return
-        
-        age = (datetime.now() - birthdate).days // 365
-        
-        if age < 1 or age > 120:
-            await message.answer("❌ Пожалуйста, укажите корректную дату рождения")
-            return
-        
-        await state.update_data(birthdate=birthdate.date().isoformat())
-        
-        await message.answer(
-            f"✅ Дата рождения: {birthdate.strftime('%d.%m.%Y')} ({age} лет)",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        
-        await message.answer(
-            "⚧️ *Шаг 4 из 6*\n\n"
-            "Выберите пол:",
-            reply_markup=get_gender_keyboard(),
-            parse_mode="Markdown"
-        )
-        
-        await state.set_state(Registration.waiting_for_gender)
-        
-    except ValueError:
-        await message.answer(
-            "❌ Неверный формат даты\n\n"
-            "Используйте формат: ДД.ММ.ГГГГ\n"
-            "Например: 15.03.1990"
-        )
+    date_string = sanitize_text(message.text)
+
+    # Валидация даты рождения
+    is_valid, error_message, birthdate = validate_birthdate(date_string)
+    if not is_valid:
+        await message.answer(error_message)
+        return
+
+    age = (datetime.now() - birthdate).days // 365
+
+    await state.update_data(birthdate=birthdate.date().isoformat())
+
+    await message.answer(
+        f"✅ Дата рождения: {birthdate.strftime('%d.%m.%Y')} ({age} лет)",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+    await message.answer(
+        "⚧️ *Шаг 4 из 6*\n\n"
+        "Выберите пол:",
+        reply_markup=get_gender_keyboard(),
+        parse_mode="Markdown"
+    )
+
+    await state.set_state(Registration.waiting_for_gender)
 
 
 # ============ ЭТАП 4: ПОЛ ============
@@ -321,32 +334,30 @@ async def process_gender(message: Message, state: FSMContext):
 @router.message(Registration.waiting_for_height, F.text)
 async def process_height(message: Message, state: FSMContext):
     """Обработка роста"""
-    try:
-        height = int(message.text.strip())
-        
-        if height < 50 or height > 250:
-            await message.answer("❌ Пожалуйста, укажите корректный рост (50-250 см)")
-            return
-        
-        await state.update_data(height=height)
-        
-        await message.answer(
-            f"✅ Рост: {height} см",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        
-        await message.answer(
-            "⚖️ *Шаг 6 из 6*\n\n"
-            "Введите ваш вес в килограммах\n"
-            "Например: 70",
-            reply_markup=get_cancel_keyboard(),
-            parse_mode="Markdown"
-        )
-        
-        await state.set_state(Registration.waiting_for_weight)
-        
-    except ValueError:
-        await message.answer("❌ Пожалуйста, введите число (например, 175)")
+    height_str = sanitize_text(message.text)
+
+    # Валидация роста
+    is_valid, error_message, height = validate_height(height_str)
+    if not is_valid:
+        await message.answer(error_message)
+        return
+
+    await state.update_data(height=height)
+
+    await message.answer(
+        f"✅ Рост: {height} см",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+    await message.answer(
+        "⚖️ *Шаг 6 из 6*\n\n"
+        "Введите ваш вес в килограммах\n"
+        "Например: 70 или 70.5",
+        reply_markup=get_cancel_keyboard(),
+        parse_mode="Markdown"
+    )
+
+    await state.set_state(Registration.waiting_for_weight)
 
 
 # ============ ЭТАП 6: ВЕС ============
@@ -354,59 +365,57 @@ async def process_height(message: Message, state: FSMContext):
 @router.message(Registration.waiting_for_weight, F.text)
 async def process_weight(message: Message, state: FSMContext):
     """Обработка веса и завершение регистрации"""
+    weight_str = sanitize_text(message.text)
+
+    # Валидация веса
+    is_valid, error_message, weight = validate_weight(weight_str)
+    if not is_valid:
+        await message.answer(error_message)
+        return
+
+    await state.update_data(weight=weight)
+
+    await message.answer(
+        f"✅ Вес: {weight} кг",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+    # Сохраняем в базу данных
+    data = await state.get_data()
+
     try:
-        weight = float(message.text.strip().replace(",", "."))
-        
-        if weight < 20 or weight > 300:
-            await message.answer("❌ Пожалуйста, укажите корректный вес (20-300 кг)")
-            return
-        
-        await state.update_data(weight=weight)
-        
+        profile_data = {
+            'user_id': message.from_user.id,
+            'username': message.from_user.username,
+            'full_name': data['full_name'],
+            'phone': data['phone'],
+            'birthdate': data['birthdate'],
+            'gender': data['gender'],
+            'height': data['height'],
+            'weight': data['weight'],
+            'created_at': datetime.now().isoformat(),
+            'updated_at': datetime.now().isoformat()
+        }
+
+        supabase_client.table('user_profiles').insert(profile_data).execute()
+
         await message.answer(
-            f"✅ Вес: {weight} кг",
-            reply_markup=ReplyKeyboardRemove()
+            "🎉 *Регистрация завершена!*\n\n"
+            "Ваш профиль успешно создан.\n"
+            "Теперь вы можете пользоваться всеми функциями бота!",
+            reply_markup=get_main_menu(),
+            parse_mode="Markdown"
         )
-        
-        # Сохраняем в базу данных
-        data = await state.get_data()
-        
-        try:
-            profile_data = {
-                'user_id': message.from_user.id,
-                'username': message.from_user.username,
-                'full_name': data['full_name'],
-                'phone': data['phone'],
-                'birthdate': data['birthdate'],
-                'gender': data['gender'],
-                'height': data['height'],
-                'weight': data['weight'],
-                'created_at': datetime.now().isoformat(),
-                'updated_at': datetime.now().isoformat()
-            }
-            
-            supabase_client.table('user_profiles').insert(profile_data).execute()
-            
-            await message.answer(
-                "🎉 *Регистрация завершена!*\n\n"
-                "Ваш профиль успешно создан.\n"
-                "Теперь вы можете пользоваться всеми функциями бота!",
-                reply_markup=get_main_menu(),
-                parse_mode="Markdown"
-            )
-            
-            await state.clear()
-            
-        except Exception as e:
-            logger.error(f"DB Error: {e}")
-            await message.answer(
-                "❌ Ошибка при сохранении профиля\n"
-                "Попробуйте ещё раз: /start"
-            )
-            await state.clear()
-        
-    except ValueError:
-        await message.answer("❌ Пожалуйста, введите число (например, 70 или 70.5)")
+
+        await state.clear()
+
+    except Exception as e:
+        logger.error(f"DB Error: {e}")
+        await message.answer(
+            "❌ Ошибка при сохранении профиля\n"
+            "Попробуйте ещё раз: /start"
+        )
+        await state.clear()
 
 
 # ============ РЕДАКТИРОВАНИЕ ПРОФИЛЯ ============

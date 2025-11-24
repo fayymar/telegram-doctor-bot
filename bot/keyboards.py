@@ -13,8 +13,9 @@ def get_main_menu() -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text="🩺 Новая консультация")],
         [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="📋 История")],
-        [KeyboardButton(text="🔍 Найти специалиста")],
-        [KeyboardButton(text="ℹ️ Помощь")]
+        [KeyboardButton(text="💊 Лекарства"), KeyboardButton(text="📓 Дневник")],
+        [KeyboardButton(text="🗺 Найти клиники"), KeyboardButton(text="🔍 Найти специалиста")],
+        [KeyboardButton(text="💾 Экспорт анамнеза"), KeyboardButton(text="ℹ️ Помощь")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
@@ -48,6 +49,7 @@ def get_cancel_keyboard() -> ReplyKeyboardMarkup:
 def get_profile_menu() -> ReplyKeyboardMarkup:
     """Меню профиля (ОБЫЧНЫЕ КНОПКИ)"""
     keyboard = [
+        [KeyboardButton(text="📊 Показать ИМТ")],
         [KeyboardButton(text="✏️ Изменить данные")],
         [KeyboardButton(text="🔙 В главное меню")]
     ]
