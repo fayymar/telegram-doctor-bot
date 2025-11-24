@@ -3,6 +3,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 class Registration(StatesGroup):
     """Состояния для регистрации пользователя"""
+    choosing_language = State()  # Выбор языка
     waiting_for_full_name = State()
     waiting_for_phone = State()
     waiting_for_birthdate = State()
