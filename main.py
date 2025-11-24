@@ -7,6 +7,8 @@ from aiogram.enums import ParseMode
 
 from config import BOT_TOKEN
 from bot.handlers import basic, profile, consultation, specialists
+from bot.middlewares import FSMTimeoutMiddleware
+from utils.logger import setup_logger
 
 
 # Настройка логирования
@@ -14,7 +16,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 
 # Инициализация бота
@@ -25,11 +27,14 @@ bot = Bot(
 
 dp = Dispatcher()
 
+# Регистрация middleware
+dp.message.middleware(FSMTimeoutMiddleware())
+dp.callback_query.middleware(FSMTimeoutMiddleware())
 
 # Регистрация роутеров (ПОРЯДОК ВАЖЕН!)
 dp.include_router(basic.router)        # Базовые команды (/start, /help)
 dp.include_router(profile.router)      # Профиль и регистрация
-dp.include_router(specialists.router)  # НОВЫЙ: Поиск специалистов
+dp.include_router(specialists.router)  # Поиск специалистов
 dp.include_router(consultation.router) # Консультации (должен быть последним)
 
 

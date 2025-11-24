@@ -1,6 +1,8 @@
 import os
 from supabase import create_client, Client
+from utils.logger import setup_logger
 
+logger = setup_logger(__name__)
 
 # Получаем переменные окружения
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -16,4 +18,4 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 # Создаём клиент Supabase
 supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-print("✅ Supabase client initialized successfully")
+logger.info("✅ Supabase client initialized successfully")
