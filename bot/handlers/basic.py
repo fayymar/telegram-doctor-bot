@@ -6,8 +6,9 @@ from aiogram.fsm.context import FSMContext
 from bot.keyboards import get_main_menu, get_gender_keyboard
 from bot.states import Registration
 from database.connection import supabase_client
+from utils.logger import setup_logger
 
-
+logger = setup_logger(__name__)
 router = Router()
 
 
@@ -45,7 +46,7 @@ async def cmd_start(message: Message, state: FSMContext):
             await state.set_state(Registration.waiting_for_full_name)
             
     except Exception as e:
-        print(f"Database error: {e}")
+        logger.error(f"Database error in cmd_start for user {user_id}: {e}", exc_info=True)
         await message.answer(
             "❌ Произошла ошибка при подключении к базе данных.\n"
             "Попробуйте позже или обратитесь к администратору."

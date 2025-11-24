@@ -2,7 +2,9 @@
 CREATE TABLE IF NOT EXISTS user_profiles (
     user_id BIGINT PRIMARY KEY,
     username TEXT,
-    age INTEGER,
+    full_name TEXT,
+    phone TEXT,
+    birthdate DATE,
     gender TEXT CHECK (gender IN ('male', 'female', 'other')),
     height INTEGER,
     weight DECIMAL(5,2),
