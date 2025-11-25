@@ -28,15 +28,19 @@ class Consultation(StatesGroup):
     # Этап 1: Основные симптомы
     waiting_for_symptoms = State()
     confirming_symptoms = State()
-    
-    # Этап 2: Давность симптомов
-    waiting_for_duration = State()
-    
-    # Этап 3: Дополнительные симптомы
+
+    # Этап 2: Дополнительные симптомы (первый выбор)
     selecting_additional_symptoms = State()
     waiting_for_other_symptoms = State()
-    
-    # Этап 4: Финальное подтверждение
+
+    # Этап 3: Уточняющие симптомы (второй выбор)
+    selecting_clarifying_symptoms = State()
+    waiting_for_clarifying_symptoms = State()
+
+    # Этап 4: Давность симптомов
+    waiting_for_duration = State()
+
+    # Этап 5: Финальное подтверждение
     final_confirmation = State()
 
 
