@@ -1,5 +1,6 @@
 """
 Локальная база медицинских знаний для быстрого поиска типовых случаев
+Использует МКБ-10 (Международная классификация болезней) для определения специалистов
 """
 import json
 import os
@@ -10,35 +11,39 @@ logger = setup_logger(__name__)
 
 
 class LocalMedicalDB:
-    """Быстрая локальная база для типовых случаев симптомов"""
+    """Быстрая локальная база для типовых случаев симптомов с поддержкой МКБ-10"""
 
     def __init__(self):
-        self.symptoms_db = self._load_database()
-        logger.info(f"LocalMedicalDB initialized with {len(self.symptoms_db)} symptoms")
+        self.symptoms_db = self._load_database('symptoms_db.json')
+        self.icd10_mapping = self._load_database('icd10_mapping.json')
+        logger.info(
+            f"LocalMedicalDB initialized: {len(self.symptoms_db)} symptoms, "
+            f"{len(self.icd10_mapping.get('specific_codes', {}))} ICD-10 codes"
+        )
 
-    def _load_database(self) -> dict:
+    def _load_database(self, filename: str) -> dict:
         """Загружает базу данных из JSON файла"""
         db_path = os.path.join(
             os.path.dirname(__file__),
             'data',
-            'symptoms_db.json'
+            filename
         )
 
         try:
             with open(db_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                logger.info(f"Loaded symptoms database from {db_path}")
+                logger.info(f"Loaded {filename}")
                 return data
         except FileNotFoundError:
-            logger.error(f"Symptoms database not found at {db_path}")
+            logger.error(f"Database not found: {db_path}")
             return {}
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse symptoms database: {e}")
+            logger.error(f"Failed to parse {filename}: {e}")
             return {}
 
     def search(self, symptoms_text: str) -> Optional[dict]:
         """
-        Поиск по симптомам в локальной базе
+        Поиск по симптомам в локальной базе с использованием МКБ-10
 
         Args:
             symptoms_text: Текст симптомов от пользователя
@@ -46,10 +51,10 @@ class LocalMedicalDB:
         Returns:
             {
                 'specialists': [{'name': 'Невролог', 'percent': 70}, ...],
-                'confidence': 0.85,  # Уверенность в рекомендации (0-1)
-                'red_flags': [...],  # Тревожные признаки
-                'common_causes': [...],  # Типичные причины
-                'source': 'local_db'
+                'confidence': 0.85,
+                'red_flags_found': False,
+                'icd10_code': 'R51',
+                'source': 'local_db_icd10'
             }
             или None если не найдено
         """
@@ -69,35 +74,57 @@ class LocalMedicalDB:
         for keyword in keywords:
             if keyword in self.symptoms_db:
                 symptom_data = self.symptoms_db[keyword]
+                icd10_code = symptom_data.get('icd10_code')
+
+                if not icd10_code:
+                    logger.warning(f"No ICD-10 code for '{keyword}'")
+                    continue
+
+                # Получаем данные из МКБ-10
+                icd10_data = self.icd10_mapping.get('specific_codes', {}).get(icd10_code)
+
+                if not icd10_data:
+                    logger.warning(f"ICD-10 code '{icd10_code}' not found in mapping")
+                    continue
+
                 confidence = symptom_data.get('confidence', 0.5)
 
-                # Проверяем наличие красных флагов
-                red_flag_boost = self._check_red_flags(
-                    symptoms_lower,
-                    symptom_data.get('red_flags', [])
-                )
+                # Проверяем наличие красных флагов из МКБ-10
+                red_flags = icd10_data.get('red_flags', [])
+                red_flags_found = self._check_red_flags(symptoms_lower, red_flags)
 
                 # Если есть красные флаги - снижаем уверенность (нужен AI)
-                if red_flag_boost:
+                if red_flags_found:
                     confidence *= 0.7
-                    logger.info(f"Red flags detected for '{keyword}', reducing confidence to {confidence}")
+                    logger.info(f"Red flags detected for '{keyword}' ({icd10_code}), reducing confidence")
 
                 # Выбираем лучшее совпадение
                 if confidence > best_confidence:
                     best_confidence = confidence
+
+                    # Формируем список специалистов из МКБ-10
+                    specialists_dict = icd10_data.get('specialists', {})
+                    specialists = [
+                        {'name': name, 'percent': percent}
+                        for name, percent in specialists_dict.items()
+                    ]
+                    # Сортируем по убыванию процента
+                    specialists.sort(key=lambda x: x['percent'], reverse=True)
+
                     best_match = {
-                        'specialists': symptom_data['specialists'],
+                        'specialists': specialists,
                         'confidence': confidence,
-                        'red_flags_found': red_flag_boost,
-                        'red_flags': symptom_data.get('red_flags', []),
-                        'common_causes': symptom_data.get('common_causes', []),
-                        'source': 'local_db',
+                        'red_flags_found': red_flags_found,
+                        'icd10_code': icd10_code,
+                        'icd10_name': icd10_data.get('name', ''),
+                        'source': 'local_db_icd10',
                         'matched_keyword': keyword
                     }
 
         if best_match:
             logger.info(
-                f"Found match: '{best_match['matched_keyword']}' "
+                f"Found ICD-10 match: '{best_match['matched_keyword']}' → "
+                f"{best_match['icd10_code']} ({best_match['icd10_name']}) "
                 f"with confidence {best_match['confidence']:.2f}"
             )
 
