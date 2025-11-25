@@ -591,11 +591,33 @@ async def final_confirm(message: Message, state: FSMContext):
     # Формируем результат с рейтингом специалистов
     result_text = f"🩺 *Рекомендации специалистов*\n\n"
 
-    # Добавляем каждого специалиста с процентом
-    for idx, spec in enumerate(recommendation['specialists'][:5], 1):
-        percent = spec['match_percent']
-        result_text += f"*{idx}. {spec['name']}* — вероятность {percent}%\n"
-        result_text += f"_{spec['reason']}_\n\n"
+    # Нормализуем проценты так, чтобы сумма была 100%
+    specialists = recommendation['specialists'][:5]
+
+    if specialists:
+        # Считаем сумму исходных процентов
+        total = sum(spec['match_percent'] for spec in specialists)
+
+        # Нормализуем каждый процент
+        normalized_specialists = []
+        for spec in specialists:
+            normalized_percent = (spec['match_percent'] / total) * 100 if total > 0 else 0
+            normalized_specialists.append({
+                'name': spec['name'],
+                'percent': round(normalized_percent, 1),
+                'reason': spec['reason']
+            })
+
+        # Корректируем погрешность округления - добавляем разницу к первому специалисту
+        current_sum = sum(s['percent'] for s in normalized_specialists)
+        if current_sum != 100.0 and normalized_specialists:
+            diff = round(100.0 - current_sum, 1)
+            normalized_specialists[0]['percent'] = round(normalized_specialists[0]['percent'] + diff, 1)
+
+        # Добавляем каждого специалиста с нормализованным процентом
+        for idx, spec in enumerate(normalized_specialists, 1):
+            result_text += f"*{idx}. {spec['name']}* — вероятность {spec['percent']}%\n"
+            result_text += f"_{spec['reason']}_\n\n"
 
     # Добавляем срочность
     result_text += f"{urgency_emoji.get(recommendation['urgency'], '📋')} *Срочность:* "
