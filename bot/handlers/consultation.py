@@ -17,12 +17,14 @@ from bot.keyboards import (
     get_result_keyboard
 )
 from services.ai_service import AIService
+from services.medical_router import MedicalRouter
 from database.connection import supabase_client
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 router = Router()
-ai_service = AIService()
+ai_service = AIService()  # Используется для генерации симптомов
+medical_router = MedicalRouter()  # Используется для рекомендации врачей
 
 
 # ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
@@ -865,7 +867,8 @@ async def final_confirm(message: Message, state: FSMContext):
     clarifying_symptoms = list(data.get('selected_clarifying', set()))
     all_additional = additional_symptoms + clarifying_symptoms
 
-    recommendation = ai_service.recommend_doctor(
+    # Используем гибридный роутер (локальная БД + AI)
+    recommendation = medical_router.recommend_doctor(
         main_symptoms=data.get('main_symptoms', ''),
         duration=data.get('duration', ''),
         additional_symptoms=all_additional,
