@@ -11,7 +11,7 @@ services:
         value: 3.11.0
       - key: BOT_TOKEN
         sync: false
-      - key: GEMINI_API_KEY
+      - key: GROQ_API_KEY
         sync: false
       - key: SUPABASE_URL
         sync: false
