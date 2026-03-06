@@ -1,7 +1,9 @@
 from datetime import datetime
+import re
 from aiogram import Router, F
 from aiogram.types import Message, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
+from postgrest.exceptions import APIError
 
 from bot.states import Registration, EditProfile
 from bot.keyboards import (
@@ -68,6 +70,55 @@ async def process_phone_input(message: Message, phone_input: str) -> tuple[bool,
     await message.answer(info_text, reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
 
     return True, formatted_phone
+
+
+def _extract_missing_column(error_text: str) -> str | None:
+    """Извлекает имя отсутствующей колонки из ошибки PostgREST."""
+    patterns = [
+        r"Could not find the '([^']+)' column",
+        r'column "([^"]+)" of relation "user_profiles" does not exist'
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, error_text)
+        if match:
+            return match.group(1)
+
+    return None
+
+
+def save_profile_with_fallback(profile_data: dict) -> None:
+    """
+    Сохраняет профиль через upsert.
+
+    Если в БД отсутствуют новые колонки (например, full_name/phone/birthdate/language/updated_at),
+    повторяет upsert с урезанным набором полей, чтобы регистрация не падала полностью.
+    """
+    payload = dict(profile_data)
+
+    while True:
+        try:
+            supabase_client.table('user_profiles').upsert(
+                payload,
+                on_conflict='user_id'
+            ).execute()
+            return
+        except APIError as error:
+            error_text = str(error)
+            missing_column = _extract_missing_column(error_text)
+
+            if not missing_column or missing_column not in payload:
+                raise
+
+            logger.warning(
+                "user_profiles schema mismatch: missing column '%s'. Retrying without it.",
+                missing_column
+            )
+            payload.pop(missing_column, None)
+
+            # Должны остаться как минимум PK и ключевые медицинские поля
+            if 'user_id' not in payload:
+                raise
 
 
 # ============ РЕГИСТРАЦИЯ ============
@@ -439,6 +490,8 @@ async def process_weight(message: Message, state: FSMContext):
     try:
         lang = data.get('language', 'ru')
 
+        now_iso = datetime.now().isoformat()
+
         profile_data = {
             'user_id': message.from_user.id,
             'username': message.from_user.username,
@@ -449,11 +502,12 @@ async def process_weight(message: Message, state: FSMContext):
             'height': data['height'],
             'weight': data['weight'],
             'language': lang,
-            'created_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat()
+            'updated_at': now_iso
         }
 
-        supabase_client.table('user_profiles').insert(profile_data).execute()
+        # Используем upsert, чтобы повторная регистрация обновляла профиль,
+        # а не падала с ошибкой уникальности по user_id.
+        save_profile_with_fallback(profile_data)
 
         completion_texts = {
             "ru": (
