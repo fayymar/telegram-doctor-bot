@@ -87,7 +87,7 @@ def _extract_missing_column(error_text: str) -> str | None:
     return None
 
 
-def save_profile_with_fallback(profile_data: dict) -> None:
+def save_profile_with_fallback(profile_data: dict, first_error: APIError | None = None) -> None:
     """
     Сохраняет профиль через upsert.
 
@@ -96,29 +96,36 @@ def save_profile_with_fallback(profile_data: dict) -> None:
     """
     payload = dict(profile_data)
 
+    error: APIError | None = first_error
+
     while True:
-        try:
-            supabase_client.table('user_profiles').upsert(
-                payload,
-                on_conflict='user_id'
-            ).execute()
-            return
-        except APIError as error:
-            error_text = str(error)
-            missing_column = _extract_missing_column(error_text)
+        if error is None:
+            try:
+                supabase_client.table('user_profiles').upsert(
+                    payload,
+                    on_conflict='user_id'
+                ).execute()
+                return
+            except APIError as current_error:
+                error = current_error
 
-            if not missing_column or missing_column not in payload:
-                raise
+        error_text = str(error)
+        missing_column = _extract_missing_column(error_text)
 
-            logger.warning(
-                "user_profiles schema mismatch: missing column '%s'. Retrying without it.",
-                missing_column
-            )
-            payload.pop(missing_column, None)
+        if not missing_column or missing_column not in payload:
+            raise error
 
-            # Должны остаться как минимум PK и ключевые медицинские поля
-            if 'user_id' not in payload:
-                raise
+        logger.warning(
+            "user_profiles schema mismatch: missing column '%s'. Retrying without it.",
+            missing_column
+        )
+        payload.pop(missing_column, None)
+
+        # Должны остаться как минимум PK и ключевые медицинские поля
+        if 'user_id' not in payload:
+            raise error
+
+        error = None
 
 
 # ============ РЕГИСТРАЦИЯ ============
@@ -507,7 +514,13 @@ async def process_weight(message: Message, state: FSMContext):
 
         # Используем upsert, чтобы повторная регистрация обновляла профиль,
         # а не падала с ошибкой уникальности по user_id.
-        save_profile_with_fallback(profile_data)
+        try:
+            supabase_client.table('user_profiles').upsert(
+                profile_data,
+                on_conflict='user_id'
+            ).execute()
+        except APIError as upsert_error:
+            save_profile_with_fallback(profile_data, first_error=upsert_error)
 
         completion_texts = {
             "ru": (
