@@ -439,6 +439,8 @@ async def process_weight(message: Message, state: FSMContext):
     try:
         lang = data.get('language', 'ru')
 
+        now_iso = datetime.now().isoformat()
+
         profile_data = {
             'user_id': message.from_user.id,
             'username': message.from_user.username,
@@ -449,11 +451,15 @@ async def process_weight(message: Message, state: FSMContext):
             'height': data['height'],
             'weight': data['weight'],
             'language': lang,
-            'created_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat()
+            'updated_at': now_iso
         }
 
-        supabase_client.table('user_profiles').insert(profile_data).execute()
+        # Используем upsert, чтобы повторная регистрация обновляла профиль,
+        # а не падала с ошибкой уникальности по user_id.
+        supabase_client.table('user_profiles').upsert(
+            profile_data,
+            on_conflict='user_id'
+        ).execute()
 
         completion_texts = {
             "ru": (
