@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     gender TEXT CHECK (gender IN ('male', 'female', 'other')),
     height INTEGER,
     weight DECIMAL(5,2),
+    language VARCHAR(5) DEFAULT 'ru',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -38,6 +39,7 @@ CREATE INDEX IF NOT EXISTS idx_consultations_user_id ON consultations(user_id);
 CREATE INDEX IF NOT EXISTS idx_consultations_created_at ON consultations(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);
 CREATE INDEX IF NOT EXISTS idx_messages_consultation_id ON messages(consultation_id);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_language ON user_profiles(language);
 
 -- Комментарии к таблицам
 COMMENT ON TABLE user_profiles IS 'Профили пользователей телеграм бота';
