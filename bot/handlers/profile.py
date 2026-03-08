@@ -18,7 +18,7 @@ from services.phone_formatter import format_phone_number, get_phone_info
 from utils.logger import setup_logger
 from utils.validators import (
     validate_full_name,
-    validate_birthdate,
+    validate_age_or_birthdate,
     validate_height,
     validate_weight,
     sanitize_text
@@ -26,21 +26,6 @@ from utils.validators import (
 
 logger = setup_logger(__name__)
 router = Router()
-
-
-def _gender_text_to_code(gender_text: str) -> str | None:
-    """Преобразует текст кнопки пола в код, сохраняемый в БД."""
-    mapping = {
-        "👨 Мужской": "male",
-        "👩 Женский": "female",
-        "👨 Erkak": "male",
-        "👩 Ayol": "female",
-    }
-    return mapping.get(gender_text)
-
-
-def _get_gender_keyboard_by_lang(lang: str):
-    return get_gender_keyboard(lang=lang if lang in {"ru", "uz"} else "ru")
 
 
 def _upsert_profile_with_fallback(profile_data: dict):
@@ -410,18 +395,10 @@ async def process_birthdate(message: Message, state: FSMContext):
 
 # ============ ЭТАП 4: ПОЛ ============
 
-@router.message(Registration.waiting_for_gender, F.text.in_([
-    "👨 Мужской",
-    "👩 Женский",
-    "👨 Erkak",
-    "👩 Ayol",
-]))
+@router.message(Registration.waiting_for_gender, F.text.in_(list(GENDER_TEXT_TO_CODE.keys())))
 async def process_gender(message: Message, state: FSMContext):
     """Обработка выбора пола"""
-    gender = _gender_text_to_code(message.text)
-    if not gender:
-        await process_gender_invalid(message, state)
-        return
+    gender = GENDER_TEXT_TO_CODE[message.text]
     
     await state.update_data(gender=gender)
     
@@ -754,18 +731,10 @@ async def edit_birthdate(message: Message, state: FSMContext):
         await message.answer("❌ Ошибка при сохранении")
 
 
-@router.message(EditProfile.waiting_for_gender, F.text.in_([
-    "👨 Мужской",
-    "👩 Женский",
-    "👨 Erkak",
-    "👩 Ayol",
-]))
+@router.message(EditProfile.waiting_for_gender, F.text.in_(list(GENDER_TEXT_TO_CODE.keys())))
 async def edit_gender(message: Message, state: FSMContext):
     """Обработка редактирования пола"""
-    gender = _gender_text_to_code(message.text)
-    if not gender:
-        await edit_gender_invalid(message, state)
-        return
+    gender = GENDER_TEXT_TO_CODE[message.text]
     
     try:
         supabase_client.table('user_profiles').update({
