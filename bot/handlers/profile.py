@@ -17,7 +17,7 @@ from services.phone_formatter import format_phone_number, get_phone_info
 from utils.logger import setup_logger
 from utils.validators import (
     validate_full_name,
-    validate_birthdate,
+    validate_age_or_birthdate,
     validate_height,
     validate_weight,
     sanitize_text
