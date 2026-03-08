@@ -13,6 +13,7 @@ from bot.keyboards import (
     get_edit_profile_menu
 )
 from database.connection import supabase_client
+from postgrest.exceptions import APIError
 from services.phone_formatter import format_phone_number, get_phone_info
 from utils.logger import setup_logger
 from utils.validators import (
@@ -25,6 +26,51 @@ from utils.validators import (
 
 logger = setup_logger(__name__)
 router = Router()
+
+
+GENDER_TEXT_TO_CODE = {
+    "👨 Мужской": "male",
+    "👩 Женский": "female",
+    "👨 Erkak": "male",
+    "👩 Ayol": "female",
+}
+
+
+def _get_gender_keyboard_by_lang(lang: str):
+    return get_gender_keyboard(lang=lang if lang in {"ru", "uz"} else "ru")
+
+
+def _upsert_profile_with_fallback(profile_data: dict):
+    """
+    Сохраняет профиль и делает fallback, если в БД ещё нет колонки language.
+    """
+    try:
+        return supabase_client.table('user_profiles').upsert(
+            profile_data,
+            on_conflict='user_id'
+        ).execute()
+    except APIError as e:
+        error_text = str(e).lower()
+        missing_language = (
+            'language' in error_text
+            and ('column' in error_text or 'schema cache' in error_text)
+        )
+
+        if not missing_language:
+            raise
+
+        logger.warning(
+            "Column 'language' is missing in user_profiles. "
+            "Retrying profile save without language field."
+        )
+
+        fallback_data = dict(profile_data)
+        fallback_data.pop('language', None)
+
+        return supabase_client.table('user_profiles').upsert(
+            fallback_data,
+            on_conflict='user_id'
+        ).execute()
 
 
 # ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
@@ -347,10 +393,12 @@ async def process_birthdate(message: Message, state: FSMContext):
         reply_markup=ReplyKeyboardRemove()
     )
 
+    data = await state.get_data()
+
     await message.answer(
         "⚧️ *Шаг 4 из 6*\n\n"
         "Выберите пол:",
-        reply_markup=get_gender_keyboard(),
+        reply_markup=_get_gender_keyboard_by_lang(data.get('language', 'ru')),
         parse_mode="Markdown"
     )
 
@@ -359,10 +407,10 @@ async def process_birthdate(message: Message, state: FSMContext):
 
 # ============ ЭТАП 4: ПОЛ ============
 
-@router.message(Registration.waiting_for_gender, F.text.in_(["👨 Мужской", "👩 Женский"]))
+@router.message(Registration.waiting_for_gender, F.text.in_(list(GENDER_TEXT_TO_CODE.keys())))
 async def process_gender(message: Message, state: FSMContext):
     """Обработка выбора пола"""
-    gender = "male" if message.text == "👨 Мужской" else "female"
+    gender = GENDER_TEXT_TO_CODE[message.text]
     
     await state.update_data(gender=gender)
     
@@ -380,6 +428,15 @@ async def process_gender(message: Message, state: FSMContext):
     )
     
     await state.set_state(Registration.waiting_for_height)
+
+@router.message(Registration.waiting_for_gender, F.text)
+async def process_gender_invalid(message: Message, state: FSMContext):
+    """Подсказка при неверном вводе пола на регистрации"""
+    data = await state.get_data()
+    await message.answer(
+        "Пожалуйста, выберите пол кнопкой ниже.",
+        reply_markup=_get_gender_keyboard_by_lang(data.get('language', 'ru'))
+    )
 
 
 # ============ ЭТАП 5: РОСТ ============
@@ -456,10 +513,7 @@ async def process_weight(message: Message, state: FSMContext):
 
         # Используем upsert, чтобы повторная регистрация обновляла профиль,
         # а не падала с ошибкой уникальности по user_id.
-        supabase_client.table('user_profiles').upsert(
-            profile_data,
-            on_conflict='user_id'
-        ).execute()
+        _upsert_profile_with_fallback(profile_data)
 
         completion_texts = {
             "ru": (
@@ -483,9 +537,15 @@ async def process_weight(message: Message, state: FSMContext):
         await state.clear()
 
     except Exception as e:
-        logger.error(f"DB Error: {e}")
+        logger.exception("Ошибка при сохранении профиля")
+
+        # Временно показываем текст ошибки пользователю, чтобы ускорить диагностику.
+        error_text = str(e)
+        if len(error_text) > 500:
+            error_text = error_text[:500] + "..."
+
         await message.answer(
-            "❌ Ошибка при сохранении профиля\n"
+            f"❌ Ошибка при сохранении профиля:\n{error_text}\n\n"
             "Попробуйте ещё раз: /start"
         )
         await state.clear()
@@ -555,7 +615,7 @@ async def edit_gender_start(message: Message, state: FSMContext):
     """Начало редактирования пола"""
     await message.answer(
         "⚧️ Выберите пол:",
-        reply_markup=get_gender_keyboard()
+        reply_markup=_get_gender_keyboard_by_lang((await state.get_data()).get('language', 'ru'))
     )
     await state.set_state(EditProfile.waiting_for_gender)
 
@@ -653,7 +713,11 @@ async def edit_birthdate(message: Message, state: FSMContext):
     date_string = message.text.strip()
     
     try:
-        birthdate = parse_date(date_string)
+        is_valid, error_message, birthdate = validate_birthdate(date_string)
+        if not is_valid:
+            await message.answer(error_message)
+            return
+
         
         if birthdate > datetime.now():
             await message.answer("❌ Дата не может быть в будущем")
@@ -674,17 +738,15 @@ async def edit_birthdate(message: Message, state: FSMContext):
         await message.answer("Что ещё хотите изменить?", reply_markup=get_edit_profile_menu())
         await state.set_state(EditProfile.choosing_field)
         
-    except ValueError:
-        await message.answer("❌ Неверный формат даты. Используйте: ДД.ММ.ГГГГ")
     except Exception as e:
         print(f"DB Error: {e}")
         await message.answer("❌ Ошибка при сохранении")
 
 
-@router.message(EditProfile.waiting_for_gender, F.text.in_(["👨 Мужской", "👩 Женский"]))
+@router.message(EditProfile.waiting_for_gender, F.text.in_(list(GENDER_TEXT_TO_CODE.keys())))
 async def edit_gender(message: Message, state: FSMContext):
     """Обработка редактирования пола"""
-    gender = "male" if message.text == "👨 Мужской" else "female"
+    gender = GENDER_TEXT_TO_CODE[message.text]
     
     try:
         supabase_client.table('user_profiles').update({
@@ -699,6 +761,14 @@ async def edit_gender(message: Message, state: FSMContext):
     except Exception as e:
         print(f"DB Error: {e}")
         await message.answer("❌ Ошибка при сохранении")
+
+@router.message(EditProfile.waiting_for_gender, F.text)
+async def edit_gender_invalid(message: Message, state: FSMContext):
+    """Подсказка при неверном вводе пола в редактировании"""
+    await message.answer(
+        "Пожалуйста, выберите пол кнопкой ниже.",
+        reply_markup=_get_gender_keyboard_by_lang((await state.get_data()).get('language', 'ru'))
+    )
 
 
 @router.message(EditProfile.waiting_for_height, F.text)
