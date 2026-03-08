@@ -30,10 +30,16 @@ def get_phone_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def get_gender_keyboard() -> ReplyKeyboardMarkup:
+def get_gender_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
     """Клавиатура выбора пола (ОБЫЧНЫЕ КНОПКИ)"""
+    options = {
+        "ru": ("👨 Мужской", "👩 Женский"),
+        "uz": ("👨 Erkak", "👩 Ayol"),
+    }
+    male_text, female_text = options.get(lang, options["ru"])
+
     keyboard = [
-        [KeyboardButton(text="👨 Мужской"), KeyboardButton(text="👩 Женский")]
+        [KeyboardButton(text=male_text), KeyboardButton(text=female_text)]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=True)
 
