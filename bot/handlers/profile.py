@@ -18,7 +18,7 @@ from services.phone_formatter import format_phone_number, get_phone_info
 from utils.logger import setup_logger
 from utils.validators import (
     validate_full_name,
-    validate_birthdate,
+    validate_age_or_birthdate,
     validate_height,
     validate_weight,
     sanitize_text
@@ -26,18 +26,6 @@ from utils.validators import (
 
 logger = setup_logger(__name__)
 router = Router()
-
-
-GENDER_TEXT_TO_CODE = {
-    "👨 Мужской": "male",
-    "👩 Женский": "female",
-    "👨 Erkak": "male",
-    "👩 Ayol": "female",
-}
-
-
-def _get_gender_keyboard_by_lang(lang: str):
-    return get_gender_keyboard(lang=lang if lang in {"ru", "uz"} else "ru")
 
 
 def _upsert_profile_with_fallback(profile_data: dict):
