@@ -13,6 +13,7 @@ from bot.keyboards import (
     get_edit_profile_menu
 )
 from database.connection import supabase_client
+from postgrest.exceptions import APIError
 from services.phone_formatter import format_phone_number, get_phone_info
 from utils.logger import setup_logger
 from utils.validators import (
@@ -25,6 +26,39 @@ from utils.validators import (
 
 logger = setup_logger(__name__)
 router = Router()
+
+
+def _upsert_profile_with_fallback(profile_data: dict):
+    """
+    Сохраняет профиль и делает fallback, если в БД ещё нет колонки language.
+    """
+    try:
+        return supabase_client.table('user_profiles').upsert(
+            profile_data,
+            on_conflict='user_id'
+        ).execute()
+    except APIError as e:
+        error_text = str(e).lower()
+        missing_language = (
+            'language' in error_text
+            and ('column' in error_text or 'schema cache' in error_text)
+        )
+
+        if not missing_language:
+            raise
+
+        logger.warning(
+            "Column 'language' is missing in user_profiles. "
+            "Retrying profile save without language field."
+        )
+
+        fallback_data = dict(profile_data)
+        fallback_data.pop('language', None)
+
+        return supabase_client.table('user_profiles').upsert(
+            fallback_data,
+            on_conflict='user_id'
+        ).execute()
 
 
 # ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
@@ -456,10 +490,7 @@ async def process_weight(message: Message, state: FSMContext):
 
         # Используем upsert, чтобы повторная регистрация обновляла профиль,
         # а не падала с ошибкой уникальности по user_id.
-        supabase_client.table('user_profiles').upsert(
-            profile_data,
-            on_conflict='user_id'
-        ).execute()
+        _upsert_profile_with_fallback(profile_data)
 
         completion_texts = {
             "ru": (
@@ -483,9 +514,15 @@ async def process_weight(message: Message, state: FSMContext):
         await state.clear()
 
     except Exception as e:
-        logger.error(f"DB Error: {e}")
+        logger.exception("Ошибка при сохранении профиля")
+
+        # Временно показываем текст ошибки пользователю, чтобы ускорить диагностику.
+        error_text = str(e)
+        if len(error_text) > 500:
+            error_text = error_text[:500] + "..."
+
         await message.answer(
-            "❌ Ошибка при сохранении профиля\n"
+            f"❌ Ошибка при сохранении профиля:\n{error_text}\n\n"
             "Попробуйте ещё раз: /start"
         )
         await state.clear()
