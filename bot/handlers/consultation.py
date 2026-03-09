@@ -854,34 +854,41 @@ async def show_final_confirmation(message: Message, state: FSMContext):
 
 @router.message(Consultation.final_confirmation, F.text == "✅ Подтвердить")
 async def final_confirm(message: Message, state: FSMContext):
-    """Финальное подтверждение и получение рекомендации"""
+    """Финальное подтверждение, показ полного анамнеза и получение рекомендации"""
     await message.answer("✅ Данные подтверждены")
-    
     await message.answer("⏳ Анализирую симптомы и подбираю специалиста...")
-    
+
     data = await state.get_data()
     user_profile = await get_user_profile(message.from_user.id)
 
-    # Объединяем все дополнительные симптомы (дополнительные + уточняющие)
+    # Собираем симптомы
+    main_symptoms = data.get('main_symptoms', 'не указано')
+    duration = data.get('duration', 'не указано')
+
     additional_symptoms = list(data.get('selected_additional', set()))
     clarifying_symptoms = list(data.get('selected_clarifying', set()))
+
+    # Чтобы вывод был стабильным и аккуратным
+    additional_symptoms = sorted(additional_symptoms)
+    clarifying_symptoms = sorted(clarifying_symptoms)
+
     all_additional = additional_symptoms + clarifying_symptoms
 
-    # Используем гибридный роутер (локальная БД + AI)
+    # Рекомендация врача
     recommendation = medical_router.recommend_doctor(
-        main_symptoms=data.get('main_symptoms', ''),
-        duration=data.get('duration', ''),
+        main_symptoms=main_symptoms,
+        duration=duration,
         additional_symptoms=all_additional,
         user_profile=user_profile
     )
 
-    # Сохраняем консультацию с первым (главным) специалистом
+    # Сохраняем консультацию в БД
     top_specialist = recommendation['specialists'][0]['name'] if recommendation['specialists'] else 'Терапевт'
 
     await save_consultation(message.from_user.id, {
         'symptoms': {
-            'main': data.get('main_symptoms'),
-            'duration': data.get('duration'),
+            'main': main_symptoms,
+            'duration': duration,
             'additional': additional_symptoms,
             'clarifying': clarifying_symptoms
         },
@@ -904,17 +911,38 @@ async def final_confirm(message: Message, state: FSMContext):
         'low': 'Низкая (плановый приём)'
     }
 
-    # Формируем результат с рейтингом специалистов
-    result_text = f"🩺 *Рекомендации специалистов*\n\n"
+    # ========= ФОРМИРУЕМ ПОЛНЫЙ АНАМНЕЗ =========
+    result_text = "📋 *Ваш анамнез*\n\n"
 
-    # Нормализуем проценты так, чтобы сумма была 100%
+    formatted_main = format_symptoms_with_bullets(main_symptoms)
+    result_text += f"*Основные симптомы:*\n{formatted_main}\n\n"
+
+    if additional_symptoms:
+        result_text += "*Дополнительные симптомы:*\n"
+        for symptom in additional_symptoms:
+            result_text += f"• {symptom}\n"
+        result_text += "\n"
+    else:
+        result_text += "*Дополнительные симптомы:* нет\n\n"
+
+    if clarifying_symptoms:
+        result_text += "*Уточняющие симптомы:*\n"
+        for symptom in clarifying_symptoms:
+            result_text += f"• {symptom}\n"
+        result_text += "\n"
+    else:
+        result_text += "*Уточняющие симптомы:* нет\n\n"
+
+    result_text += f"*Давность симптомов:* {duration}\n\n"
+
+    # ========= ДОБАВЛЯЕМ РЕКОМЕНДАЦИИ =========
+    result_text += "🩺 *Рекомендованные специалисты*\n\n"
+
     specialists = recommendation['specialists'][:5]
 
     if specialists:
-        # Считаем сумму исходных процентов
         total = sum(spec['match_percent'] for spec in specialists)
 
-        # Нормализуем каждый процент
         normalized_specialists = []
         for spec in specialists:
             normalized_percent = (spec['match_percent'] / total) * 100 if total > 0 else 0
@@ -924,18 +952,19 @@ async def final_confirm(message: Message, state: FSMContext):
                 'reason': spec['reason']
             })
 
-        # Корректируем погрешность округления - добавляем разницу к первому специалисту
         current_sum = sum(s['percent'] for s in normalized_specialists)
         if current_sum != 100.0 and normalized_specialists:
             diff = round(100.0 - current_sum, 1)
             normalized_specialists[0]['percent'] = round(normalized_specialists[0]['percent'] + diff, 1)
 
-        # Добавляем каждого специалиста с нормализованным процентом
         for idx, spec in enumerate(normalized_specialists, 1):
             result_text += f"*{idx}. {spec['name']}* — вероятность {spec['percent']}%\n"
             result_text += f"_{spec['reason']}_\n\n"
+    else:
+        result_text += "*1. Терапевт* — базовая рекомендация\n"
+        result_text += "_Подойдёт для первичной оценки симптомов._\n\n"
 
-    # Добавляем срочность
+    # ========= ДОБАВЛЯЕМ СРОЧНОСТЬ =========
     result_text += f"{urgency_emoji.get(recommendation['urgency'], '📋')} *Срочность:* "
     result_text += f"{urgency_text.get(recommendation['urgency'], 'Средняя')}\n"
     result_text += f"_{recommendation.get('urgency_reason', 'Рекомендуется консультация.')}_"
