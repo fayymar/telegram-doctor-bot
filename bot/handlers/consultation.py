@@ -272,6 +272,50 @@ async def confirm_symptoms(message: Message, state: FSMContext):
 
 @router.message(Consultation.confirming_symptoms, F.text == "🔄 Начать заново")
 async def restart_symptoms(message: Message, state: FSMContext):
+    @router.message(
+    Consultation.confirming_symptoms,
+    F.text,
+    ~F.text.in_(["✅ Подтвердить", "🔄 Начать заново", "❌ Отменить"])
+)
+async def add_details_to_symptoms(message: Message, state: FSMContext):
+    """Добавление деталей к уже введённым симптомам"""
+    new_details = message.text.strip()
+
+    if len(new_details) < 2:
+        await message.answer("❌ Опишите детали чуть подробнее")
+        return
+
+    data = await state.get_data()
+    current_symptoms = data.get("main_symptoms", "").strip()
+
+    # Склеиваем старые симптомы и новые детали
+    if current_symptoms:
+        combined_symptoms = f"{current_symptoms}. {new_details}"
+    else:
+        combined_symptoms = new_details
+
+    await message.answer("⏳ Добавляю детали...")
+    await message.answer("✏️ Обновляю формулировку...")
+
+    try:
+        improved_symptoms = ai_service.improve_symptoms_text(combined_symptoms)
+    except Exception as e:
+        logger.error(f"Error while improving combined symptoms: {e}", exc_info=True)
+        improved_symptoms = combined_symptoms
+
+    await state.update_data(main_symptoms=improved_symptoms)
+
+    formatted_symptoms = format_symptoms_with_bullets(improved_symptoms)
+
+    await message.answer(
+        f"📝 *Обновлённые симптомы:*\n\n"
+        f"{formatted_symptoms}\n\n"
+        f"Теперь можете:\n"
+        f"• нажать *✅ Подтвердить*\n"
+        f"• или отправить ещё одно сообщение с деталями",
+        reply_markup=get_symptoms_confirmation(),
+        parse_mode="Markdown"
+    )
     """Начать описание заново"""
     await message.answer(
         "🔄 Начинаем заново\n\n"
