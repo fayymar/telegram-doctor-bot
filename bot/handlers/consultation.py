@@ -854,27 +854,22 @@ async def show_final_confirmation(message: Message, state: FSMContext):
 
 @router.message(Consultation.final_confirmation, F.text == "✅ Подтвердить")
 async def final_confirm(message: Message, state: FSMContext):
-    """Финальное подтверждение, показ полного анамнеза и получение рекомендации"""
+    """Финальное подтверждение, показ полного анамнеза и объяснение выбора врача"""
     await message.answer("✅ Данные подтверждены")
     await message.answer("⏳ Анализирую симптомы и подбираю специалиста...")
 
     data = await state.get_data()
     user_profile = await get_user_profile(message.from_user.id)
 
-    # Собираем симптомы
+    # Основные данные консультации
     main_symptoms = data.get('main_symptoms', 'не указано')
     duration = data.get('duration', 'не указано')
 
-    additional_symptoms = list(data.get('selected_additional', set()))
-    clarifying_symptoms = list(data.get('selected_clarifying', set()))
-
-    # Чтобы вывод был стабильным и аккуратным
-    additional_symptoms = sorted(additional_symptoms)
-    clarifying_symptoms = sorted(clarifying_symptoms)
-
+    additional_symptoms = sorted(list(data.get('selected_additional', set())))
+    clarifying_symptoms = sorted(list(data.get('selected_clarifying', set())))
     all_additional = additional_symptoms + clarifying_symptoms
 
-    # Рекомендация врача
+    # Получаем рекомендацию
     recommendation = medical_router.recommend_doctor(
         main_symptoms=main_symptoms,
         duration=duration,
@@ -882,9 +877,11 @@ async def final_confirm(message: Message, state: FSMContext):
         user_profile=user_profile
     )
 
-    # Сохраняем консультацию в БД
+    # Главный рекомендованный специалист
     top_specialist = recommendation['specialists'][0]['name'] if recommendation['specialists'] else 'Терапевт'
+    top_reason = recommendation['specialists'][0].get('reason', '') if recommendation['specialists'] else ''
 
+    # Сохраняем консультацию в БД
     await save_consultation(message.from_user.id, {
         'symptoms': {
             'main': main_symptoms,
@@ -911,7 +908,28 @@ async def final_confirm(message: Message, state: FSMContext):
         'low': 'Низкая (плановый приём)'
     }
 
-    # ========= ФОРМИРУЕМ ПОЛНЫЙ АНАМНЕЗ =========
+    # Собираем весь список симптомов для красивого объяснения
+    all_symptoms_for_text = []
+
+    if main_symptoms and main_symptoms != 'не указано':
+        # Основные симптомы могут быть строкой с несколькими жалобами
+        main_formatted = format_symptoms_with_bullets(main_symptoms)
+        main_lines = [line.replace('• ', '').strip() for line in main_formatted.split('\n') if line.strip()]
+        all_symptoms_for_text.extend(main_lines)
+
+    all_symptoms_for_text.extend(additional_symptoms)
+    all_symptoms_for_text.extend(clarifying_symptoms)
+
+    # Убираем дубли, сохраняя порядок
+    unique_symptoms = []
+    seen = set()
+    for symptom in all_symptoms_for_text:
+        cleaned = symptom.strip()
+        if cleaned and cleaned.lower() not in seen:
+            unique_symptoms.append(cleaned)
+            seen.add(cleaned.lower())
+
+    # ---------- ФОРМИРУЕМ ИТОГ ----------
     result_text = "📋 *Ваш анамнез*\n\n"
 
     formatted_main = format_symptoms_with_bullets(main_symptoms)
@@ -935,7 +953,36 @@ async def final_confirm(message: Message, state: FSMContext):
 
     result_text += f"*Давность симптомов:* {duration}\n\n"
 
-    # ========= ДОБАВЛЯЕМ РЕКОМЕНДАЦИИ =========
+    # ---------- ОБЪЯСНЯЕМ, ПОЧЕМУ ИМЕННО ЭТОТ ВРАЧ ----------
+    result_text += "🧠 *Почему рекомендован именно этот врач*\n\n"
+
+    if unique_symptoms:
+        result_text += f"На основании указанных вами симптомов:\n"
+        for symptom in unique_symptoms[:8]:
+            result_text += f"• {symptom}\n"
+        result_text += "\n"
+    else:
+        result_text += "На основании описанных вами жалоб и давности симптомов.\n\n"
+
+    result_text += (
+        f"*Рекомендована консультация: {top_specialist}*\n"
+    )
+
+    if top_reason:
+        result_text += f"{top_reason}\n\n"
+    else:
+        result_text += (
+            "Этот специалист выбран, потому что указанные симптомы "
+            "чаще относятся к его профилю и требуют именно такой оценки.\n\n"
+        )
+
+    if duration and duration != 'не указано':
+        result_text += (
+            f"Также учтена *давность симптомов* — {duration}, "
+            "потому что длительность жалоб влияет на срочность обращения и профиль врача.\n\n"
+        )
+
+    # ---------- СПИСОК СПЕЦИАЛИСТОВ ----------
     result_text += "🩺 *Рекомендованные специалисты*\n\n"
 
     specialists = recommendation['specialists'][:5]
@@ -949,7 +996,7 @@ async def final_confirm(message: Message, state: FSMContext):
             normalized_specialists.append({
                 'name': spec['name'],
                 'percent': round(normalized_percent, 1),
-                'reason': spec['reason']
+                'reason': spec.get('reason', 'Рекомендуется консультация для уточнения диагноза.')
             })
 
         current_sum = sum(s['percent'] for s in normalized_specialists)
@@ -959,12 +1006,12 @@ async def final_confirm(message: Message, state: FSMContext):
 
         for idx, spec in enumerate(normalized_specialists, 1):
             result_text += f"*{idx}. {spec['name']}* — вероятность {spec['percent']}%\n"
-            result_text += f"_{spec['reason']}_\n\n"
+            result_text += f"_Почему: {spec['reason']}_\n\n"
     else:
         result_text += "*1. Терапевт* — базовая рекомендация\n"
-        result_text += "_Подойдёт для первичной оценки симптомов._\n\n"
+        result_text += "_Почему: подходит для первичной оценки симптомов и дальнейшего направления к узкому специалисту._\n\n"
 
-    # ========= ДОБАВЛЯЕМ СРОЧНОСТЬ =========
+    # ---------- СРОЧНОСТЬ ----------
     result_text += f"{urgency_emoji.get(recommendation['urgency'], '📋')} *Срочность:* "
     result_text += f"{urgency_text.get(recommendation['urgency'], 'Средняя')}\n"
     result_text += f"_{recommendation.get('urgency_reason', 'Рекомендуется консультация.')}_"
