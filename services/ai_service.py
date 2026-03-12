@@ -1,4 +1,4 @@
-import os
+import re
 from typing import List, Optional
 
 from huggingface_hub import InferenceClient
@@ -20,19 +20,13 @@ class AIService:
         self.fallback_models = FALLBACK_AI_MODELS
         self.models = [self.primary_model] + self.fallback_models
 
-        self.client = InferenceClient(
-            api_key=self.api_key
-        )
+        self.client = InferenceClient(api_key=self.api_key)
 
         logger.info("AIService initialized")
         logger.info(f"Primary model: {self.primary_model}")
         logger.info(f"Fallback models: {self.fallback_models if self.fallback_models else 'none'}")
 
     def _build_prompt(self, system_prompt: str, user_message: str) -> str:
-        """
-        Универсальный prompt для text-generation моделей.
-        Он более устойчив для разных open-weight моделей, чем chat-only формат.
-        """
         return (
             "### SYSTEM INSTRUCTION ###\n"
             f"{system_prompt.strip()}\n\n"
@@ -50,9 +44,6 @@ class AIService:
         temperature: float = 0.3,
         max_tokens: int = 1024
     ) -> str:
-        """
-        Один вызов конкретной модели
-        """
         prompt = self._build_prompt(system_prompt, user_message)
 
         logger.info(f"Trying model: {model_name}")
@@ -84,9 +75,6 @@ class AIService:
         temperature: float = 0.3,
         max_tokens: int = 1024
     ) -> str:
-        """
-        Вызывает primary модель, при ошибке идет по fallback цепочке
-        """
         last_error: Optional[Exception] = None
 
         for model_name in self.models:
@@ -100,9 +88,116 @@ class AIService:
                 )
             except Exception as e:
                 last_error = e
-                logger.error(f"Model failed: {model_name} | {type(e).__name__}: {e}", exc_info=True)
+                logger.error(
+                    f"Model failed: {model_name} | {type(e).__name__}: {e}",
+                    exc_info=True
+                )
 
         raise RuntimeError(f"All AI models failed. Last error: {last_error}")
+
+    def _extract_json_block(self, text: str) -> str:
+        """
+        Пытается вытащить JSON даже если модель вернула лишний текст
+        """
+        if not text:
+            return text
+
+        text = text.strip()
+
+        fenced = re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, re.DOTALL)
+        if fenced:
+            return fenced.group(1).strip()
+
+        obj_match = re.search(r"\{.*\}", text, re.DOTALL)
+        if obj_match:
+            return obj_match.group(0).strip()
+
+        arr_match = re.search(r"\[.*\]", text, re.DOTALL)
+        if arr_match:
+            return arr_match.group(0).strip()
+
+        return text
+
+    def _local_symptom_validation(self, text: str) -> dict:
+        """
+        Локальная проверка симптомов, если AI ответил криво или недоступен
+        """
+        raw = (text or "").strip()
+        clean = raw.lower()
+
+        if len(clean) < 3:
+            return {
+                "is_valid": False,
+                "symptoms": "",
+                "reason": "Слишком короткое описание"
+            }
+
+        medical_keywords = [
+            "бол", "голов", "каш", "темпера", "тошнот", "рвот", "слабост",
+            "озноб", "насмор", "горл", "давлен", "сердц", "одыш", "живот",
+            "спин", "груд", "ухо", "нос", "глаз", "сып", "зуд", "жж", "понос",
+            "запор", "головокруж", "обмор", "судорог", "онемен", "покраснен",
+            "отек", "кров", "ран", "травм", "ломит", "беспокоит", "жар",
+            "озноб", "хрип", "простуд", "мокрот", "чих", "сустав", "мышц"
+        ]
+
+        non_medical_patterns = [
+            "привет",
+            "как дела",
+            "напиши",
+            "сделай",
+            "переведи",
+            "рецепт",
+            "погода",
+            "анекдот",
+            "стих",
+            "сказка"
+        ]
+
+        if any(pattern in clean for pattern in non_medical_patterns):
+            return {
+                "is_valid": False,
+                "symptoms": "",
+                "reason": "Текст не похож на описание симптомов"
+            }
+
+        if any(keyword in clean for keyword in medical_keywords):
+            return {
+                "is_valid": True,
+                "symptoms": raw,
+                "reason": ""
+            }
+
+        if len(clean.split()) >= 2 and ("," in clean or " и " in clean):
+            return {
+                "is_valid": True,
+                "symptoms": raw,
+                "reason": ""
+            }
+
+        return {
+            "is_valid": False,
+            "symptoms": "",
+            "reason": "Не удалось распознать медицинские симптомы"
+        }
+
+    def _local_improve_text(self, text: str) -> str:
+        """
+        Простой локальный fallback для улучшения текста
+        """
+        if not text:
+            return text
+
+        improved = text.strip()
+        improved = re.sub(r"\s+", " ", improved)
+        improved = improved.replace(" ,", ",")
+        improved = improved.replace(" .", ".")
+        improved = improved.strip(" -")
+
+        if improved and improved[0].islower():
+            improved = improved[0].upper() + improved[1:]
+
+        return improved
 
     def validate_symptoms(self, text: str) -> dict:
         """
@@ -143,32 +238,32 @@ class AIService:
         user_message = f"Проверь, описывает ли это симптомы:\n\n{text}"
 
         try:
-            response = self._call_ai(system_prompt, user_message, temperature=0.1, max_tokens=500)
+            response = self._call_ai(
+                system_prompt,
+                user_message,
+                temperature=0.1,
+                max_tokens=500
+            )
 
-            result = safe_parse_json_object(response, default={
+            cleaned_response = self._extract_json_block(response)
+
+            result = safe_parse_json_object(cleaned_response, default={
                 "is_valid": False,
                 "symptoms": "",
                 "reason": "Не удалось распознать формат ответа"
             })
 
-            if not validate_json_structure(result, ["is_valid", "symptoms", "reason"]):
-                logger.warning("AI returned incomplete validation result")
-                return {
-                    "is_valid": False,
-                    "symptoms": "",
-                    "reason": "Некорректный ответ от AI"
-                }
+            if validate_json_structure(result, ["is_valid", "symptoms", "reason"]):
+                logger.info(f"Symptom validation via AI: valid={result['is_valid']}")
+                return result
 
-            logger.info(f"Symptom validation: valid={result['is_valid']}")
-            return result
+            logger.warning("AI returned incomplete validation result, using local fallback")
+            return self._local_symptom_validation(text)
 
         except Exception as e:
             logger.error(f"Error in validate_symptoms: {e}", exc_info=True)
-            return {
-                "is_valid": False,
-                "symptoms": "",
-                "reason": "Ошибка при проверке. Попробуйте ещё раз"
-            }
+            logger.warning("Using local symptom validation fallback")
+            return self._local_symptom_validation(text)
 
     def improve_symptoms_text(self, text: str) -> str:
         """
@@ -192,7 +287,12 @@ class AIService:
         user_message = f"Улучши описание симптомов:\n\n{text}"
 
         try:
-            response = self._call_ai(system_prompt, user_message, temperature=0.2, max_tokens=400)
+            response = self._call_ai(
+                system_prompt,
+                user_message,
+                temperature=0.2,
+                max_tokens=400
+            )
 
             improved = response.strip()
 
@@ -208,15 +308,15 @@ class AIService:
                     improved = improved[len(phrase):].strip()
 
             if not improved:
-                logger.warning("AI returned empty improvement, using original text")
-                return text
+                logger.warning("AI returned empty improvement, using local fallback")
+                return self._local_improve_text(text)
 
             logger.info("Symptoms text improved successfully")
             return improved
 
         except Exception as e:
-            logger.error(f"Error in improve_symptoms_text: {e}. Using original text", exc_info=True)
-            return text
+            logger.error(f"Error in improve_symptoms_text: {e}. Using local fallback", exc_info=True)
+            return self._local_improve_text(text)
 
     def generate_additional_symptoms(self, main_symptoms: str, duration: str) -> List[str]:
         """
@@ -244,21 +344,83 @@ class AIService:
         )
 
         try:
-            response = self._call_ai(system_prompt, user_message, temperature=0.3, max_tokens=500)
+            response = self._call_ai(
+                system_prompt,
+                user_message,
+                temperature=0.3,
+                max_tokens=500
+            )
 
-            symptoms = safe_parse_json_array(response, default=[])
+            cleaned_response = self._extract_json_block(response)
+            symptoms = safe_parse_json_array(cleaned_response, default=[])
 
             if not symptoms:
-                logger.warning("AI returned empty symptoms list")
-                return []
+                logger.warning("AI returned empty symptoms list, using fallback list")
+                return self._fallback_additional_symptoms(main_symptoms)
 
             filtered = self._filter_symptoms(symptoms)
+            if not filtered:
+                return self._fallback_additional_symptoms(main_symptoms)
+
             logger.info(f"Generated {len(filtered)} additional symptoms")
             return filtered
 
         except Exception as e:
             logger.error(f"Error in generate_additional_symptoms: {e}", exc_info=True)
-            return []
+            return self._fallback_additional_symptoms(main_symptoms)
+
+    def _fallback_additional_symptoms(self, main_symptoms: str) -> List[str]:
+        """
+        Простой fallback-список, если AI не сработал
+        """
+        text = (main_symptoms or "").lower()
+
+        if any(word in text for word in ["каш", "горл", "насмор", "темпера", "простуд"]):
+            return [
+                "боль в горле",
+                "насморк",
+                "озноб",
+                "слабость",
+                "температура",
+                "одышка",
+                "боль в груди",
+                "осиплость"
+            ]
+
+        if any(word in text for word in ["голов", "головокруж", "давлен", "слабост"]):
+            return [
+                "головокружение",
+                "тошнота",
+                "слабость",
+                "шум в ушах",
+                "нарушение зрения",
+                "онемение",
+                "сонливость",
+                "температура"
+            ]
+
+        if any(word in text for word in ["живот", "тошнот", "рвот", "понос", "стул"]):
+            return [
+                "рвота",
+                "тошнота",
+                "диарея",
+                "запор",
+                "вздутие живота",
+                "температура",
+                "слабость",
+                "боль после еды"
+            ]
+
+        return [
+            "слабость",
+            "температура",
+            "тошнота",
+            "головокружение",
+            "озноб",
+            "боль",
+            "онемение",
+            "одышка"
+        ]
 
     def _filter_symptoms(self, symptoms: List[str]) -> List[str]:
         """
@@ -357,9 +519,16 @@ class AIService:
 Определи наиболее подходящих специалистов и срочность."""
 
         try:
-            response = self._call_ai(system_prompt, user_message, temperature=0.1, max_tokens=900)
+            response = self._call_ai(
+                system_prompt,
+                user_message,
+                temperature=0.1,
+                max_tokens=900
+            )
 
-            result = safe_parse_json_object(response, default={
+            cleaned_response = self._extract_json_block(response)
+
+            result = safe_parse_json_object(cleaned_response, default={
                 "specialists": [
                     {
                         "name": "Терапевт",
@@ -372,18 +541,8 @@ class AIService:
             })
 
             if not validate_json_structure(result, ["specialists", "urgency"]):
-                logger.warning("AI returned incomplete doctor recommendation")
-                return {
-                    "specialists": [
-                        {
-                            "name": "Терапевт",
-                            "match_percent": 80,
-                            "reason": "Рекомендуется для первичного осмотра."
-                        }
-                    ],
-                    "urgency": "medium",
-                    "urgency_reason": "Рекомендуется консультация в ближайшее время."
-                }
+                logger.warning("AI returned incomplete doctor recommendation, using fallback")
+                return self._fallback_recommendation(main_symptoms, additional_symptoms)
 
             valid_specialists = []
             for spec in result.get("specialists", [])[:5]:
@@ -405,11 +564,7 @@ class AIService:
                 })
 
             if not valid_specialists:
-                valid_specialists = [{
-                    "name": "Терапевт",
-                    "match_percent": 80,
-                    "reason": "Рекомендуется для первичного осмотра."
-                }]
+                return self._fallback_recommendation(main_symptoms, additional_symptoms)
 
             valid_specialists.sort(key=lambda x: x["match_percent"], reverse=True)
 
@@ -430,14 +585,112 @@ class AIService:
 
         except Exception as e:
             logger.error(f"Error in recommend_doctor: {e}", exc_info=True)
+            return self._fallback_recommendation(main_symptoms, additional_symptoms)
+
+    def _fallback_recommendation(self, main_symptoms: str, additional_symptoms: List[str]) -> dict:
+        """
+        Простой локальный fallback, если AI не выдал корректный JSON
+        """
+        text = f"{main_symptoms} {' '.join(additional_symptoms)}".lower()
+
+        if any(word in text for word in ["каш", "горл", "насмор", "ухо", "осипл", "глот"]):
             return {
                 "specialists": [
                     {
+                        "name": "ЛОР",
+                        "match_percent": 75,
+                        "reason": "Симптомы могут относиться к заболеваниям уха, горла или носа."
+                    },
+                    {
                         "name": "Терапевт",
-                        "match_percent": 80,
-                        "reason": "Рекомендуется для первичного осмотра."
+                        "match_percent": 25,
+                        "reason": "Подходит для первичного осмотра при общих симптомах простуды."
                     }
                 ],
                 "urgency": "medium",
-                "urgency_reason": "Рекомендуется консультация в ближайшее время."
+                "urgency_reason": "Рекомендуется консультация в ближайшие дни."
             }
+
+        if any(word in text for word in ["голов", "онемен", "головокруж", "судорог", "зрение"]):
+            return {
+                "specialists": [
+                    {
+                        "name": "Невролог",
+                        "match_percent": 75,
+                        "reason": "Симптомы могут относиться к неврологическому профилю."
+                    },
+                    {
+                        "name": "Терапевт",
+                        "match_percent": 25,
+                        "reason": "Подходит для первичной оценки симптомов."
+                    }
+                ],
+                "urgency": "medium",
+                "urgency_reason": "Рекомендуется консультация в ближайшие дни."
+            }
+
+        if any(word in text for word in ["живот", "тошнот", "рвот", "понос", "стул", "вздут"]):
+            return {
+                "specialists": [
+                    {
+                        "name": "Гастроэнтеролог",
+                        "match_percent": 75,
+                        "reason": "Жалобы могут быть связаны с желудочно-кишечным трактом."
+                    },
+                    {
+                        "name": "Терапевт",
+                        "match_percent": 25,
+                        "reason": "Подходит для первичного осмотра."
+                    }
+                ],
+                "urgency": "medium",
+                "urgency_reason": "Рекомендуется консультация в ближайшие дни."
+            }
+
+        if any(word in text for word in ["сердц", "давлен", "груд", "одыш", "аритм"]):
+            return {
+                "specialists": [
+                    {
+                        "name": "Кардиолог",
+                        "match_percent": 75,
+                        "reason": "Жалобы могут относиться к сердечно-сосудистой системе."
+                    },
+                    {
+                        "name": "Терапевт",
+                        "match_percent": 25,
+                        "reason": "Подходит для первичной оценки состояния."
+                    }
+                ],
+                "urgency": "high",
+                "urgency_reason": "При боли в груди, одышке или сердцебиении лучше обратиться быстрее."
+            }
+
+        if any(word in text for word in ["сып", "зуд", "кож", "покраснен", "пятн"]):
+            return {
+                "specialists": [
+                    {
+                        "name": "Дерматолог",
+                        "match_percent": 75,
+                        "reason": "Симптомы могут относиться к кожным заболеваниям."
+                    },
+                    {
+                        "name": "Терапевт",
+                        "match_percent": 25,
+                        "reason": "Подходит для первичной оценки состояния."
+                    }
+                ],
+                "urgency": "medium",
+                "urgency_reason": "Рекомендуется консультация в ближайшие дни."
+            }
+
+        return {
+            "specialists": [
+                {
+                    "name": "Терапевт",
+                    "match_percent": 80,
+                    "reason": "Рекомендуется для первичного осмотра и определения дальнейшей тактики."
+                }
+            ],
+            "urgency": "medium",
+            "urgency_reason": "Рекомендуется консультация в ближайшее время."
+        }
