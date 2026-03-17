@@ -1,6 +1,8 @@
 import re
 from typing import Dict, List, Tuple, Any
 
+from services.red_flags import detect_red_flags
+
 
 CLUSTERS = [
     "general",
@@ -379,25 +381,7 @@ COMBINATION_BONUSES = [
 
 
 # ---------------------------------------------------------
-# 4. Red flags
-# Пока здесь просто список - позже можно вынести отдельно
-# ---------------------------------------------------------
-
-RED_FLAG_SYMPTOMS = {
-    "потеря сознания",
-    "судороги",
-    "одышка",
-    "боль в груди",
-    "давление в груди",
-    "кровотечение",
-    "открытая рана",
-    "ампутация",
-    "перелом",
-}
-
-
-# ---------------------------------------------------------
-# 5. Вспомогательные функции
+# 4. Вспомогательные функции
 # ---------------------------------------------------------
 
 def _clean_text(text: str) -> str:
@@ -537,15 +521,12 @@ def _apply_context_adjustments(
 ) -> Dict[str, int]:
     text = raw_text.lower()
 
-    # Боль внизу живота у женщин
     if "боль внизу живота" in normalized_symptoms:
         scores["gyn"] += 1
 
-    # Кашель + мокрота усиливает respiratory
     if "кашель" in normalized_symptoms and "мокрота" in normalized_symptoms:
         scores["respiratory"] += 2
 
-    # Температура + насморк + боль в горле
     if (
         "температура" in normalized_symptoms and
         "насморк" in normalized_symptoms and
@@ -554,27 +535,19 @@ def _apply_context_adjustments(
         scores["ent"] += 1
         scores["respiratory"] += 1
 
-    # Боль в груди + давление в груди
     if "боль в груди" in normalized_symptoms and "давление в груди" in normalized_symptoms:
         scores["cardio"] += 2
 
-    # Тошнота + головная боль
     if "тошнота" in normalized_symptoms and "головная боль" in normalized_symptoms:
         scores["neuro"] += 1
 
-    # Рана/кровотечение/ампутация - усиливаем trauma
     if any(s in normalized_symptoms for s in ["рана", "открытая рана", "кровотечение", "ампутация", "перелом"]):
         scores["trauma"] += 1
 
-    # Если текст содержит "после еды", усиливаем gastro
     if "после еды" in text:
         scores["gastro"] += 2
 
     return scores
-
-
-def _detect_red_flags(normalized_symptoms: List[str]) -> List[str]:
-    return [symptom for symptom in normalized_symptoms if symptom in RED_FLAG_SYMPTOMS]
 
 
 def _rank_clusters(scores: Dict[str, int]) -> List[Tuple[str, int]]:
@@ -603,7 +576,7 @@ def _determine_confidence(ranked_clusters: List[Tuple[str, int]]) -> str:
 
 
 # ---------------------------------------------------------
-# 6. Главная функция
+# 5. Главная функция
 # ---------------------------------------------------------
 
 def parse_symptoms(raw_text: str) -> Dict[str, Any]:
@@ -647,7 +620,17 @@ def parse_symptoms(raw_text: str) -> Dict[str, Any]:
     ]
 
     confidence = _determine_confidence(ranked_clusters)
-    red_flags = _detect_red_flags(normalized_symptoms)
+
+    red_flag_result = detect_red_flags(
+        {
+            "normalized_symptoms": normalized_symptoms,
+            "primary_cluster": primary_cluster,
+            "secondary_clusters": secondary_clusters,
+            "cluster_scores": scores,
+            "raw_text": raw_text,
+        },
+        additional_symptoms=[]
+    )
 
     return {
         "raw_text": raw_text,
@@ -658,5 +641,5 @@ def parse_symptoms(raw_text: str) -> Dict[str, Any]:
         "primary_cluster": primary_cluster,
         "secondary_clusters": secondary_clusters,
         "confidence": confidence,
-        "red_flags": red_flags,
+        "red_flags": red_flag_result.get("matched_flags", []),
     }
