@@ -55,6 +55,37 @@ def format_symptoms_with_bullets(text: str) -> str:
     return '\n'.join([f"• {s}" for s in sentences])
 
 
+def _build_user_friendly_symptom_note(parsed_symptoms: dict) -> str:
+    """
+    Короткое человеческое сообщение вместо технических кластеров
+    """
+    red_flags = parsed_symptoms.get("red_flags", []) or []
+    confidence = parsed_symptoms.get("confidence", "low")
+
+    if red_flags:
+        return (
+            "Я понял ваши жалобы. "
+            "Сейчас задам несколько уточняющих вопросов, чтобы точнее оценить ситуацию и срочность."
+        )
+
+    if confidence == "high":
+        return (
+            "Я понял основные жалобы. "
+            "Сейчас уточню несколько деталей, чтобы точнее подобрать специалиста."
+        )
+
+    if confidence == "medium":
+        return (
+            "Спасибо, описание понятное. "
+            "Сейчас задам несколько уточняющих вопросов, чтобы лучше понять картину."
+        )
+
+    return (
+        "Спасибо. "
+        "Сейчас задам несколько уточняющих вопросов, чтобы не упустить важные детали."
+    )
+
+
 async def get_user_profile(user_id: int) -> dict:
     """Получает профиль пользователя для рекомендаций"""
     try:
@@ -97,29 +128,6 @@ async def save_consultation(user_id: int, data: dict):
         supabase_client.table('consultations').insert(consultation_data).execute()
     except Exception as e:
         logger.error(f"DB Error in save_consultation: {e}", exc_info=True)
-
-
-def _build_stage_logic_text(parsed_symptoms: dict) -> str:
-    """
-    Красивое короткое пояснение, как бот понял жалобы
-    """
-    primary = parsed_symptoms.get("primary_cluster", "general")
-    secondary = parsed_symptoms.get("secondary_clusters", [])
-    confidence = parsed_symptoms.get("confidence", "low")
-    red_flags = parsed_symptoms.get("red_flags", [])
-
-    text = "🔎 *Как бот понял ситуацию*\n"
-    text += f"• Основной профиль симптомов: `{primary}`\n"
-
-    if secondary:
-        text += f"• Дополнительные направления: {', '.join(secondary)}\n"
-
-    text += f"• Уверенность: `{confidence}`"
-
-    if red_flags:
-        text += f"\n• Важные признаки: {', '.join(red_flags)}"
-
-    return text
 
 
 # ============ НАЧАЛО КОНСУЛЬТАЦИИ ============
@@ -188,7 +196,7 @@ async def process_symptoms_text(message: Message, state: FSMContext):
         )
         return
 
-    await message.answer("✏️ Улучшаю формулировку...")
+    await message.answer("✏️ Уточняю формулировку...")
 
     improved_symptoms = ai_service.improve_symptoms_text(symptoms_text)
     parsed_symptoms = parse_symptoms(improved_symptoms)
@@ -199,12 +207,12 @@ async def process_symptoms_text(message: Message, state: FSMContext):
     )
 
     formatted_symptoms = format_symptoms_with_bullets(improved_symptoms)
-    logic_text = _build_stage_logic_text(parsed_symptoms)
+    helper_text = _build_user_friendly_symptom_note(parsed_symptoms)
 
     await message.answer(
         f"📝 *Ваши симптомы:*\n\n"
         f"{formatted_symptoms}\n\n"
-        f"{logic_text}\n\n"
+        f"{helper_text}\n\n"
         f"Подтвердите или добавьте детали:",
         reply_markup=get_symptoms_confirmation(),
         parse_mode="Markdown"
@@ -262,7 +270,7 @@ async def confirm_symptoms(message: Message, state: FSMContext):
     await message.answer(
         "📋 *Этап 2 из 5*\n\n"
         "Отметьте, что ещё вас беспокоит:\n"
-        "(варианты подобраны по вашему профилю симптомов и без повторов)",
+        "(варианты подобраны по вашим жалобам и без повторов)",
         reply_markup=get_additional_cancel_keyboard(),
         parse_mode="Markdown"
     )
@@ -336,12 +344,12 @@ async def add_details_to_symptoms(message: Message, state: FSMContext):
     )
 
     formatted_symptoms = format_symptoms_with_bullets(improved_symptoms)
-    logic_text = _build_stage_logic_text(parsed_symptoms)
+    helper_text = _build_user_friendly_symptom_note(parsed_symptoms)
 
     await message.answer(
         f"📝 *Обновлённые симптомы:*\n\n"
         f"{formatted_symptoms}\n\n"
-        f"{logic_text}\n\n"
+        f"{helper_text}\n\n"
         f"Теперь можете:\n"
         f"• нажать *✅ Подтвердить*\n"
         f"• или отправить ещё одно сообщение с деталями",
@@ -414,15 +422,12 @@ async def back_from_additional(message: Message, state: FSMContext):
     """Возврат к подтверждению основных симптомов"""
     data = await state.get_data()
     main_symptoms = data.get('main_symptoms', '')
-    parsed_symptoms = data.get('parsed_symptoms') or parse_symptoms(main_symptoms)
 
     formatted_symptoms = format_symptoms_with_bullets(main_symptoms)
-    logic_text = _build_stage_logic_text(parsed_symptoms)
 
     await message.answer(
         f"📝 *Ваши симптомы:*\n\n"
         f"{formatted_symptoms}\n\n"
-        f"{logic_text}\n\n"
         f"Подтвердите или добавьте детали:",
         reply_markup=get_symptoms_confirmation(),
         parse_mode="Markdown"
@@ -597,14 +602,11 @@ async def back_from_other_symptom(message: Message, state: FSMContext):
         await state.set_state(Consultation.selecting_additional_symptoms)
     else:
         main_symptoms = data.get('main_symptoms', '')
-        parsed_symptoms = data.get('parsed_symptoms') or parse_symptoms(main_symptoms)
         formatted_symptoms = format_symptoms_with_bullets(main_symptoms)
-        logic_text = _build_stage_logic_text(parsed_symptoms)
 
         await message.answer(
             f"📝 *Ваши симптомы:*\n\n"
             f"{formatted_symptoms}\n\n"
-            f"{logic_text}\n\n"
             f"Подтвердите или добавьте детали:",
             reply_markup=get_symptoms_confirmation(),
             parse_mode="Markdown"
@@ -726,14 +728,11 @@ async def back_from_clarifying(message: Message, state: FSMContext):
         await state.set_state(Consultation.selecting_additional_symptoms)
     else:
         main_symptoms = data.get('main_symptoms', '')
-        parsed_symptoms = data.get('parsed_symptoms') or parse_symptoms(main_symptoms)
         formatted_symptoms = format_symptoms_with_bullets(main_symptoms)
-        logic_text = _build_stage_logic_text(parsed_symptoms)
 
         await message.answer(
             f"📝 *Ваши симптомы:*\n\n"
             f"{formatted_symptoms}\n\n"
-            f"{logic_text}\n\n"
             f"Подтвердите или добавьте детали:",
             reply_markup=get_symptoms_confirmation(),
             parse_mode="Markdown"
