@@ -3,7 +3,7 @@ from typing import List, Optional
 
 from huggingface_hub import InferenceClient
 
-from config import HF_TOKEN, PRIMARY_AI_MODEL, FALLBACK_AI_MODELS
+from config import HF_TOKEN, PRIMARY_AI_MODEL
 from utils.logger import setup_logger
 from utils.json_parser import safe_parse_json_object, safe_parse_json_array, validate_json_structure
 from utils.retry import retry_on_failure
@@ -17,57 +17,12 @@ class AIService:
     def __init__(self):
         self.api_key = HF_TOKEN
         self.primary_model = PRIMARY_AI_MODEL
-        self.fallback_models = FALLBACK_AI_MODELS
-        self.models = [self.primary_model] + self.fallback_models
-
         self.client = InferenceClient(api_key=self.api_key)
 
         logger.info("AIService initialized")
         logger.info(f"Primary model: {self.primary_model}")
-        logger.info(f"Fallback models: {self.fallback_models if self.fallback_models else 'none'}")
-
-    def _build_prompt(self, system_prompt: str, user_message: str) -> str:
-        return (
-            "### SYSTEM INSTRUCTION ###\n"
-            f"{system_prompt.strip()}\n\n"
-            "### USER MESSAGE ###\n"
-            f"{user_message.strip()}\n\n"
-            "### ASSISTANT RESPONSE ###\n"
-        )
 
     @retry_on_failure(max_attempts=2, delay=1.0, exceptions=(Exception,))
-    def _call_model_once(
-        self,
-        model_name: str,
-        system_prompt: str,
-        user_message: str,
-        temperature: float = 0.3,
-        max_tokens: int = 1024
-    ) -> str:
-        prompt = self._build_prompt(system_prompt, user_message)
-
-        logger.info(f"Trying model: {model_name}")
-
-        response = self.client.text_generation(
-            prompt,
-            model=model_name,
-            max_new_tokens=max_tokens,
-            temperature=temperature,
-            do_sample=temperature > 0,
-            return_full_text=False
-        )
-
-        if not response:
-            raise RuntimeError(f"Empty response from model: {model_name}")
-
-        result = str(response).strip()
-
-        if not result:
-            raise RuntimeError(f"Blank response from model: {model_name}")
-
-        logger.info(f"Model success: {model_name} | response length={len(result)}")
-        return result
-
     def _call_ai(
         self,
         system_prompt: str,
@@ -75,25 +30,25 @@ class AIService:
         temperature: float = 0.3,
         max_tokens: int = 1024
     ) -> str:
-        last_error: Optional[Exception] = None
+        prompt = f"{system_prompt.strip()}\n\n{user_message.strip()}"
 
-        for model_name in self.models:
-            try:
-                return self._call_model_once(
-                    model_name=model_name,
-                    system_prompt=system_prompt,
-                    user_message=user_message,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
-            except Exception as e:
-                last_error = e
-                logger.error(
-                    f"Model failed: {model_name} | {type(e).__name__}: {e}",
-                    exc_info=True
-                )
+        logger.info(f"Calling model: {self.primary_model}")
 
-        raise RuntimeError(f"All AI models failed. Last error: {last_error}")
+        response = self.client.chat_completion(
+            model=self.primary_model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+        result = response.choices[0].message.content
+
+        if not result or not result.strip():
+            raise RuntimeError(f"Empty response from model: {self.primary_model}")
+
+        result = result.strip()
+        logger.info(f"Model success: {self.primary_model} | response length={len(result)}")
+        return result
 
     def _extract_json_block(self, text: str) -> str:
         """
