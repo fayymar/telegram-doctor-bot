@@ -23,25 +23,9 @@ class EditProfile(StatesGroup):
     waiting_for_weight = State()
 
 
-class Consultation(StatesGroup):
-    """Состояния для консультации"""
-    # Этап 1: Основные симптомы
-    waiting_for_symptoms = State()
-    confirming_symptoms = State()
-
-    # Этап 2: Дополнительные симптомы (первый выбор)
-    selecting_additional_symptoms = State()
-    waiting_for_other_symptoms = State()
-
-    # Этап 3: Уточняющие симптомы (второй выбор)
-    selecting_clarifying_symptoms = State()
-    waiting_for_clarifying_symptoms = State()
-
-    # Этап 4: Давность симптомов
-    waiting_for_duration = State()
-
-    # Этап 5: Финальное подтверждение
-    final_confirmation = State()
+class ConsultationAgent(StatesGroup):
+    """Состояния для агентной консультации"""
+    in_progress = State()
 
 
 class FindSpecialist(StatesGroup):
