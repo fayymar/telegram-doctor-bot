@@ -33,6 +33,7 @@ def run_agent(history: list[dict], user_message: str) -> dict:
 
     try:
         raw = ai_service._call_ai(system_prompt, user_block, temperature=0.2, max_tokens=512)
+        logger.info(f"Raw AI response: {raw}")
         cleaned = ai_service._extract_json_block(raw)
 
         from utils.json_parser import safe_parse_json_object
@@ -125,6 +126,7 @@ def _conclude(history: list[dict], last_message: str) -> dict:
 
     try:
         raw = ai_service._call_ai(system_prompt, user_block, temperature=0.1, max_tokens=512)
+        logger.info(f"Raw AI response (conclude): {raw}")
         cleaned = ai_service._extract_json_block(raw)
 
         from utils.json_parser import safe_parse_json_object
