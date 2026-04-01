@@ -1,9 +1,9 @@
 import re
 from typing import List, Optional
 
-import google.generativeai as genai
+import groq
 
-from config import GEMINI_API_KEY, GEMINI_MODEL
+from config import GROQ_API_KEY, GROQ_MODEL
 from utils.logger import setup_logger
 from utils.json_parser import safe_parse_json_object, safe_parse_json_array, validate_json_structure
 
@@ -11,11 +11,11 @@ logger = setup_logger(__name__)
 
 
 class AIService:
-    """Сервис для работы с Google Gemini"""
+    """Сервис для работы с Groq"""
 
     def __init__(self):
-        genai.configure(api_key=GEMINI_API_KEY)
-        self.model_name = GEMINI_MODEL
+        self.client = groq.Groq(api_key=GROQ_API_KEY)
+        self.model_name = GROQ_MODEL
         logger.info("AIService initialized")
         logger.info(f"Model: {self.model_name}")
 
@@ -28,20 +28,17 @@ class AIService:
     ) -> str:
         logger.info(f"Calling model: {self.model_name}")
 
-        model = genai.GenerativeModel(
-            model_name=self.model_name,
-            system_instruction=system_prompt.strip(),
+        response = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
-        response = model.generate_content(
-            user_message.strip(),
-            generation_config=genai.GenerationConfig(
-                temperature=temperature,
-                max_output_tokens=max_tokens,
-            ),
-        )
-
-        result = response.text.strip()
+        result = response.choices[0].message.content.strip()
 
         if not result:
             raise RuntimeError(f"Empty response from model: {self.model_name}")

@@ -92,7 +92,8 @@ def _build_system_prompt(question_count: int) -> str:
 }}
 
 Уровни срочности: emergency | high | medium | low
-Никакого текста вне JSON."""
+Никакого текста вне JSON.
+ВАЖНО: отвечай ТОЛЬКО JSON, никакого текста до или после, никаких markdown блоков"""
 
 
 def _build_user_block(history: list[dict], user_message: str) -> str:
