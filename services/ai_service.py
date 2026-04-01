@@ -1,28 +1,24 @@
 import re
 from typing import List, Optional
 
-from huggingface_hub import InferenceClient
+import google.generativeai as genai
 
-from config import HF_TOKEN, PRIMARY_AI_MODEL
+from config import GEMINI_API_KEY, GEMINI_MODEL
 from utils.logger import setup_logger
 from utils.json_parser import safe_parse_json_object, safe_parse_json_array, validate_json_structure
-from utils.retry import retry_on_failure
 
 logger = setup_logger(__name__)
 
 
 class AIService:
-    """Сервис для работы с медицинскими LLM через Hugging Face"""
+    """Сервис для работы с Google Gemini"""
 
     def __init__(self):
-        self.api_key = HF_TOKEN
-        self.primary_model = PRIMARY_AI_MODEL
-        self.client = InferenceClient(api_key=self.api_key)
-
+        genai.configure(api_key=GEMINI_API_KEY)
+        self.model_name = GEMINI_MODEL
         logger.info("AIService initialized")
-        logger.info(f"Primary model: {self.primary_model}")
+        logger.info(f"Model: {self.model_name}")
 
-    @retry_on_failure(max_attempts=2, delay=1.0, exceptions=(Exception,))
     def _call_ai(
         self,
         system_prompt: str,
@@ -30,24 +26,27 @@ class AIService:
         temperature: float = 0.3,
         max_tokens: int = 1024
     ) -> str:
-        prompt = f"{system_prompt.strip()}\n\n{user_message.strip()}"
+        logger.info(f"Calling model: {self.model_name}")
 
-        logger.info(f"Calling model: {self.primary_model}")
-
-        response = self.client.chat_completion(
-            model=self.primary_model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=temperature,
+        model = genai.GenerativeModel(
+            model_name=self.model_name,
+            system_instruction=system_prompt.strip(),
         )
 
-        result = response.choices[0].message.content
+        response = model.generate_content(
+            user_message.strip(),
+            generation_config=genai.GenerationConfig(
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+            ),
+        )
 
-        if not result or not result.strip():
-            raise RuntimeError(f"Empty response from model: {self.primary_model}")
+        result = response.text.strip()
 
-        result = result.strip()
-        logger.info(f"Model success: {self.primary_model} | response length={len(result)}")
+        if not result:
+            raise RuntimeError(f"Empty response from model: {self.model_name}")
+
+        logger.info(f"Model success: {self.model_name} | response length={len(result)}")
         return result
 
     def _extract_json_block(self, text: str) -> str:

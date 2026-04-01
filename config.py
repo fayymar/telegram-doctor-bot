@@ -12,13 +12,13 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set")
 
-# Hugging Face API Token
-HF_TOKEN = os.getenv("HF_TOKEN")
-if not HF_TOKEN:
-    raise ValueError("HF_TOKEN environment variable is not set")
+# Google Gemini API Key
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY environment variable is not set")
 
-# Основная модель
-PRIMARY_AI_MODEL = os.getenv("PRIMARY_AI_MODEL", "google/medgemma-4b-it")
+# Модель Gemini
+GEMINI_MODEL = "gemini-2.0-flash"
 
 # Supabase credentials
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -39,4 +39,4 @@ logger.info(f"   - Supabase URL: {SUPABASE_URL}")
 logger.info(f"   - Port: {PORT}")
 logger.info(f"   - Debug mode: {DEBUG}")
 logger.info(f"   - FSM timeout: {FSM_TIMEOUT}s")
-logger.info(f"   - Primary AI model: {PRIMARY_AI_MODEL}")
+logger.info(f"   - Gemini model: {GEMINI_MODEL}")
