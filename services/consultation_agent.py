@@ -62,7 +62,9 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict) -> list
         raw = ai_service._call_ai(system_prompt, user_message, temperature=0.3, max_tokens=800)
         logger.info(f"parse_and_generate_questions raw response: {raw}")
         cleaned = ai_service._extract_json_block(raw)
+        logger.info(f"After extract_json_block: {repr(cleaned)}")
         questions = safe_parse_json_array(cleaned, default=[])
+        logger.info(f"After safe_parse_json_array: {questions}")
 
         valid = []
         for q in questions:
