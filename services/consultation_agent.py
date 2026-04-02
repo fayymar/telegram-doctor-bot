@@ -53,27 +53,14 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict) -> list
     else:
         num_questions = 3
 
-    system_prompt = f"""Ты — медицинский ассистент. Сгенерируй {num_questions} уточняющих вопроса для пациента по его симптомам.
-
-ВАЖНО:
-- НЕ задавай вопросы про давность симптомов (она задаётся отдельно)
-- Каждый вопрос должен иметь 3-4 варианта ответа, последний вариант — "Ничего из этого"
-- Учитывай пол пациента: {gender}, возраст: {age} лет
-- Кластер симптомов: {primary_cluster}
-- Вопросы должны помогать уточнить специалиста
-
-Ответь СТРОГО JSON-массивом, без лишнего текста:
-[
-  {{
-    "question": "Текст вопроса?",
-    "options": ["Вариант 1", "Вариант 2", "Вариант 3", "Ничего из этого"]
-  }}
-]"""
+    system_prompt = f"""Ты — медицинский ассистент. Сгенерируй {num_questions} уточняющих вопроса для пациента (пол: {gender}, возраст: {age} лет, кластер: {primary_cluster}). Не спрашивай про давность симптомов.
+Ответь ТОЛЬКО валидным JSON массивом без markdown, без ```json, без пояснений. Пример: [{{"question": "Где болит?", "options": ["Голова", "Живот", "Ничего из этого"]}}]"""
 
     user_message = f"Симптомы пациента: {symptoms_text}"
 
     try:
         raw = ai_service._call_ai(system_prompt, user_message, temperature=0.3, max_tokens=800)
+        logger.info(f"parse_and_generate_questions raw response: {raw}")
         cleaned = ai_service._extract_json_block(raw)
         questions = safe_parse_json_array(cleaned, default=[])
 
@@ -228,14 +215,27 @@ def get_final_recommendation(all_data: dict, user_profile: dict) -> dict:
         result = medical_router.recommend_doctor(symptoms, duration, additional, user_profile)
 
         specialists = result.get("specialists", [])
-        # Убираем Терапевта с первого места если есть узкие специалисты
-        if len(specialists) > 1 and specialists[0].get("name") == "Терапевт":
-            therapist = specialists.pop(0)
-            specialists.append(therapist)
-            result["specialists"] = specialists
+
+        # Принудительно удаляем Терапевта из списка
+        specialists = [s for s in specialists if s.get("name") != "Терапевт"]
+
+        # Если после удаления список пуст — оставляем fallback без Терапевта
+        if not specialists:
+            specialists = [{"name": "Врач общей практики", "match_percent": 70, "reason": "Рекомендуется для первичного осмотра."}]
 
         # Оставляем 1 главный + до 2 смежных
-        result["specialists"] = result["specialists"][:3]
+        specialists = specialists[:3]
+
+        # Пересчитываем проценты пропорционально, чтобы сумма = 100%
+        total = sum(s.get("match_percent", 0) for s in specialists)
+        if total > 0:
+            for s in specialists:
+                s["match_percent"] = round(s.get("match_percent", 0) * 100 / total)
+            # Корректируем округление: добавляем остаток к первому специалисту
+            diff = 100 - sum(s["match_percent"] for s in specialists)
+            specialists[0]["match_percent"] += diff
+
+        result["specialists"] = specialists
         return result
 
     except Exception as e:
