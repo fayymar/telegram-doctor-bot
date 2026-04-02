@@ -24,8 +24,16 @@ class EditProfile(StatesGroup):
 
 
 class ConsultationAgent(StatesGroup):
-    """Состояния для агентной консультации"""
+    """Состояния для агентной консультации (устаревший класс, оставлен для совместимости)"""
     in_progress = State()
+
+
+class Consultation(StatesGroup):
+    """Состояния для многоэтапной консультации"""
+    waiting_for_symptoms = State()      # Ввод симптомов
+    answering_followup = State()        # Ответы на 2-3 уточняющих вопроса
+    waiting_for_duration = State()      # Давность симптомов
+    answering_anamnesis = State()       # 1-2 анамнестических вопроса
 
 
 class FindSpecialist(StatesGroup):

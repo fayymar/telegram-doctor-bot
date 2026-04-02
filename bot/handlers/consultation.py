@@ -2,30 +2,55 @@ import json
 from datetime import datetime
 
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
-from bot.states import ConsultationAgent
+from bot.states import Consultation
 from bot.keyboards import get_main_menu, get_cancel_keyboard
-from services.consultation_agent import run_agent
+from services.consultation_agent import (
+    check_red_flags,
+    parse_and_generate_questions,
+    get_duration_question,
+    get_anamnesis_questions,
+    get_final_recommendation,
+)
 from database.connection import supabase_client
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 router = Router()
 
-URGENCY_LABELS = {
-    "emergency": "🚨 Немедленно обратитесь за помощью",
-    "high": "⚠️ Обратитесь в течение 24 часов",
-    "medium": "📅 Рекомендуется консультация в течение недели",
-    "low": "📋 Плановый визит к врачу",
-}
+
+def _make_question_keyboard(options: list) -> InlineKeyboardMarkup:
+    """Кнопки по 2 в ряд, "✏️ Написать своё" отдельной строкой внизу."""
+    keyboard = []
+    row = []
+    for i, opt in enumerate(options):
+        row.append(InlineKeyboardButton(text=opt, callback_data=f"ans:{i}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton(text="✏️ Написать своё", callback_data="ans:custom")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-async def _save_consultation(user_id: int, history: list, result: dict):
+def _make_duration_keyboard(options: list) -> InlineKeyboardMarkup:
+    keyboard = [[InlineKeyboardButton(text=opt, callback_data=f"dur:{i}")] for i, opt in enumerate(options)]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+async def _save_consultation(user_id: int, all_data: dict, result: dict):
     try:
         specialists = result.get("specialists", [])
         top = specialists[0] if specialists else {}
+        history = (
+            [{"question": None, "answer": all_data.get("symptoms", "")}]
+            + all_data.get("followup_answers", [])
+            + [{"question": "Как давно появились симптомы?", "answer": all_data.get("duration", "")}]
+            + all_data.get("anamnesis_answers", [])
+        )
         supabase_client.table("consultations").insert({
             "user_id": user_id,
             "symptoms": json.dumps({"history": history}, ensure_ascii=False),
@@ -38,26 +63,21 @@ async def _save_consultation(user_id: int, history: list, result: dict):
         logger.error(f"DB error in _save_consultation: {e}", exc_info=True)
 
 
-def _format_conclusion(result: dict) -> str:
+def _format_result(result: dict, duration: str) -> str:
     specialists = result.get("specialists", [])
-    urgency = result.get("urgency", "medium")
-    urgency_reason = result.get("urgency_reason", "")
-
-    lines = ["🩺 *Результат консультации*\n"]
-
-    urgency_label = URGENCY_LABELS.get(urgency, URGENCY_LABELS["medium"])
-    lines.append(urgency_label)
-    if urgency_reason:
-        lines.append(f"_{urgency_reason}_\n")
-
-    lines.append("*Рекомендуемые специалисты:*")
-    for spec in specialists[:5]:
+    medals = ["🥇", "🥈", "🥉"]
+    lines = ["🏥 <b>Рекомендуемые специалисты:</b>"]
+    for i, spec in enumerate(specialists[:3]):
+        medal = medals[i] if i < len(medals) else "•"
         name = spec.get("name", "")
         pct = spec.get("match_percent", 0)
         reason = spec.get("reason", "")
-        lines.append(f"• *{name}* — {pct}%\n  {reason}")
-
-    lines.append("\n⚠️ _Это не диагноз. Обратитесь к врачу для точного обследования._")
+        lines.append(f"{medal} <b>{name}</b> — {pct}%")
+        if reason:
+            lines.append(f"   {reason}")
+    lines.append("────────────────")
+    lines.append(f"📅 Давность: {duration}")
+    lines.append("⚠️ Это не диагноз. Обратитесь к врачу для точного обследования.")
     return "\n".join(lines)
 
 
@@ -78,65 +98,256 @@ async def start_consultation(message: Message, state: FSMContext):
         logger.error(f"DB error in start_consultation: {e}", exc_info=True)
 
     await state.clear()
-    await state.set_state(ConsultationAgent.in_progress)
-    await state.update_data(history=[])
+    await state.set_state(Consultation.waiting_for_symptoms)
+    await state.update_data(user_id=message.from_user.id)
 
     await message.answer(
-        "🩺 *Новая консультация*\n\n"
+        "🩺 <b>Новая консультация</b>\n\n"
         "Опишите ваши симптомы — что вас беспокоит?\n\n"
         "💡 Чем подробнее опишете, тем точнее будет рекомендация.",
         reply_markup=get_cancel_keyboard(),
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
 
 
-@router.message(ConsultationAgent.in_progress, F.text == "❌ Отменить")
+@router.message(Consultation.waiting_for_symptoms, F.text == "❌ Отменить")
+@router.message(Consultation.answering_followup, F.text == "❌ Отменить")
+@router.message(Consultation.waiting_for_duration, F.text == "❌ Отменить")
+@router.message(Consultation.answering_anamnesis, F.text == "❌ Отменить")
 async def cancel_consultation(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("❌ Консультация отменена", reply_markup=get_main_menu())
 
 
-@router.message(ConsultationAgent.in_progress, F.text)
-async def process_agent_message(message: Message, state: FSMContext):
-    user_text = message.text.strip()
-    if not user_text:
+@router.message(Consultation.waiting_for_symptoms, F.text)
+async def process_symptoms(message: Message, state: FSMContext):
+    symptoms_text = message.text.strip()
+    if not symptoms_text:
+        return
+
+    await message.answer("⏳ Анализирую симптомы...")
+
+    # Шаг 1: Красные флаги
+    red = check_red_flags(symptoms_text)
+    if red.get("red_flag"):
+        await state.clear()
+        await message.answer(
+            "🚨 <b>Немедленно вызовите скорую помощь!</b>\n\n"
+            "Ваши симптомы требуют экстренной медицинской помощи.",
+            reply_markup=get_main_menu(),
+            parse_mode="HTML",
+        )
+        return
+
+    # Получаем профиль пользователя
+    user_profile = {}
+    try:
+        resp = supabase_client.table("user_profiles").select("*").eq(
+            "user_id", message.from_user.id
+        ).execute()
+        if resp.data:
+            user_profile = resp.data[0]
+    except Exception as e:
+        logger.error(f"DB error getting profile: {e}", exc_info=True)
+
+    # Шаг 2: Генерируем уточняющие вопросы
+    questions = parse_and_generate_questions(symptoms_text, user_profile)
+
+    await state.update_data(
+        symptoms=symptoms_text,
+        user_profile=user_profile,
+        followup_questions=questions,
+        followup_index=0,
+        followup_answers=[],
+        waiting_custom=False,
+    )
+    await state.set_state(Consultation.answering_followup)
+
+    q = questions[0]
+    await message.answer(
+        f"❓ {q['question']}",
+        reply_markup=_make_question_keyboard(q["options"]),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(Consultation.answering_followup, F.data.startswith("ans:"))
+async def process_followup_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+
+    questions = data.get("followup_questions", [])
+    index = data.get("followup_index", 0)
+    answers = data.get("followup_answers", [])
+    suffix = callback.data.split(":", 1)[1]
+
+    if suffix == "custom":
+        await state.update_data(waiting_custom=True)
+        await callback.message.answer("✏️ Напишите свой ответ:", reply_markup=get_cancel_keyboard())
+        return
+
+    opt_index = int(suffix)
+    q = questions[index]
+    answer_text = q["options"][opt_index] if opt_index < len(q["options"]) else "Нет"
+
+    answers.append({"question": q["question"], "answer": answer_text})
+    next_index = index + 1
+    await state.update_data(followup_answers=answers, followup_index=next_index, waiting_custom=False)
+
+    await _advance_followup(callback.message, state, questions, next_index)
+
+
+@router.message(Consultation.answering_followup, F.text)
+async def process_followup_text(message: Message, state: FSMContext):
+    if message.text.strip() == "❌ Отменить":
+        await state.clear()
+        await message.answer("❌ Консультация отменена", reply_markup=get_main_menu())
         return
 
     data = await state.get_data()
-    history: list = data.get("history", [])
+    if not data.get("waiting_custom"):
+        return
 
-    await message.answer("⏳ Анализирую...")
+    questions = data.get("followup_questions", [])
+    index = data.get("followup_index", 0)
+    answers = data.get("followup_answers", [])
 
-    result = run_agent(history, user_text)
+    q = questions[index]
+    answers.append({"question": q["question"], "answer": message.text.strip()})
+    next_index = index + 1
+    await state.update_data(followup_answers=answers, followup_index=next_index, waiting_custom=False)
 
-    if result["action"] == "ask":
-        question = result["question"]
+    await _advance_followup(message, state, questions, next_index)
 
-        # Записываем ответ пользователя к последнему открытому вопросу
-        if history and history[-1].get("answer") is None:
-            history[-1]["answer"] = user_text
-        else:
-            # Первичные жалобы — нет предыдущего вопроса
-            history.append({"question": None, "answer": user_text})
 
-        # Добавляем новый вопрос агента (ответ будет заполнен на следующем шаге)
-        history.append({"question": question, "answer": None})
-        await state.update_data(history=history)
-
-        await message.answer(question, reply_markup=get_cancel_keyboard())
-
-    else:
-        # conclude — закрываем последний открытый ответ
-        if history and history[-1].get("answer") is None:
-            history[-1]["answer"] = user_text
-        else:
-            history.append({"question": None, "answer": user_text})
-
-        await _save_consultation(message.from_user.id, history, result)
-        await state.clear()
-
-        await message.answer(
-            _format_conclusion(result),
-            reply_markup=get_main_menu(),
-            parse_mode="Markdown",
+async def _advance_followup(msg, state: FSMContext, questions: list, next_index: int):
+    """Показывает следующий followup-вопрос или переходит к вопросу о давности."""
+    if next_index < len(questions):
+        q = questions[next_index]
+        await msg.answer(
+            f"❓ {q['question']}",
+            reply_markup=_make_question_keyboard(q["options"]),
+            parse_mode="HTML",
         )
+    else:
+        duration_q = get_duration_question()
+        await state.set_state(Consultation.waiting_for_duration)
+        await msg.answer(
+            f"❓ {duration_q['question']}",
+            reply_markup=_make_duration_keyboard(duration_q["options"]),
+            parse_mode="HTML",
+        )
+
+
+@router.callback_query(Consultation.waiting_for_duration, F.data.startswith("dur:"))
+async def process_duration_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+
+    duration_q = get_duration_question()
+    opt_index = int(callback.data.split(":", 1)[1])
+    duration = duration_q["options"][opt_index] if opt_index < len(duration_q["options"]) else "не указана"
+
+    data = await state.get_data()
+    symptoms = data.get("symptoms", "")
+
+    await state.update_data(duration=duration, anamnesis_index=0, anamnesis_answers=[], waiting_custom_anamnesis=False)
+
+    await callback.message.answer("⏳ Подготавливаю вопросы...")
+    anamnesis_qs = get_anamnesis_questions(symptoms)
+    await state.update_data(anamnesis_questions=anamnesis_qs)
+    await state.set_state(Consultation.answering_anamnesis)
+
+    q = anamnesis_qs[0]
+    await callback.message.answer(
+        f"❓ {q['question']}",
+        reply_markup=_make_question_keyboard(q["options"]),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(Consultation.answering_anamnesis, F.data.startswith("ans:"))
+async def process_anamnesis_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+
+    questions = data.get("anamnesis_questions", [])
+    index = data.get("anamnesis_index", 0)
+    answers = data.get("anamnesis_answers", [])
+    suffix = callback.data.split(":", 1)[1]
+
+    if suffix == "custom":
+        await state.update_data(waiting_custom_anamnesis=True)
+        await callback.message.answer("✏️ Напишите свой ответ:", reply_markup=get_cancel_keyboard())
+        return
+
+    opt_index = int(suffix)
+    q = questions[index]
+    answer_text = q["options"][opt_index] if opt_index < len(q["options"]) else "Нет"
+
+    answers.append({"question": q["question"], "answer": answer_text})
+    next_index = index + 1
+    await state.update_data(anamnesis_answers=answers, anamnesis_index=next_index, waiting_custom_anamnesis=False)
+
+    await _advance_anamnesis(callback.message, state, questions, next_index)
+
+
+@router.message(Consultation.answering_anamnesis, F.text)
+async def process_anamnesis_text(message: Message, state: FSMContext):
+    if message.text.strip() == "❌ Отменить":
+        await state.clear()
+        await message.answer("❌ Консультация отменена", reply_markup=get_main_menu())
+        return
+
+    data = await state.get_data()
+    if not data.get("waiting_custom_anamnesis"):
+        return
+
+    questions = data.get("anamnesis_questions", [])
+    index = data.get("anamnesis_index", 0)
+    answers = data.get("anamnesis_answers", [])
+
+    q = questions[index]
+    answers.append({"question": q["question"], "answer": message.text.strip()})
+    next_index = index + 1
+    await state.update_data(anamnesis_answers=answers, anamnesis_index=next_index, waiting_custom_anamnesis=False)
+
+    await _advance_anamnesis(message, state, questions, next_index)
+
+
+async def _advance_anamnesis(msg, state: FSMContext, questions: list, next_index: int):
+    """Показывает следующий анамнестический вопрос или формирует финальную рекомендацию."""
+    if next_index < len(questions):
+        q = questions[next_index]
+        await msg.answer(
+            f"❓ {q['question']}",
+            reply_markup=_make_question_keyboard(q["options"]),
+            parse_mode="HTML",
+        )
+        return
+
+    # Все вопросы заданы → финальная рекомендация
+    await msg.answer("⏳ Формирую рекомендацию...")
+
+    data = await state.get_data()
+    all_data = {
+        "symptoms": data.get("symptoms", ""),
+        "followup_answers": data.get("followup_answers", []),
+        "duration": data.get("duration", "не указана"),
+        "anamnesis_answers": data.get("anamnesis_answers", []),
+    }
+    user_profile = data.get("user_profile", {})
+    user_id = data.get("user_id")
+
+    result = get_final_recommendation(all_data, user_profile)
+    duration = all_data["duration"]
+
+    if user_id:
+        await _save_consultation(user_id, all_data, result)
+
+    await state.clear()
+
+    await msg.answer(
+        _format_result(result, duration),
+        reply_markup=get_main_menu(),
+        parse_mode="HTML",
+    )
