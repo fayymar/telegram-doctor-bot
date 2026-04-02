@@ -66,8 +66,8 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict) -> list
 
         valid = []
         for q in questions:
-            if isinstance(q, dict) and q.get("question") and isinstance(q.get("options"), list):
-                options = [str(o) for o in q["options"][:5]]
+            if isinstance(q, dict) and q.get("question") and isinstance(q.get("options"), list) and len(q["options"]) >= 2:
+                options = [str(o) for o in q["options"]]
                 if "Ничего из этого" not in options:
                     options.append("Ничего из этого")
                 valid.append({"question": q["question"], "options": options})
