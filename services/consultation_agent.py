@@ -3,7 +3,9 @@ from typing import List, Dict
 from services.ai_service import AIService
 from services.symptom_parser import parse_symptoms
 from services.red_flags import detect_red_flags
-from services.medical_router import recommend_doctor
+from services.medical_router import MedicalRouter
+
+medical_router = MedicalRouter()
 from utils.logger import setup_logger
 from utils.json_parser import safe_parse_json_array
 
@@ -223,7 +225,7 @@ def get_final_recommendation(all_data: dict, user_profile: dict) -> dict:
             additional.append(f"{q_text}: {answer}" if q_text else answer)
 
     try:
-        result = recommend_doctor(symptoms, duration, additional, user_profile)
+        result = medical_router.recommend_doctor(symptoms, duration, additional, user_profile)
 
         specialists = result.get("specialists", [])
         # Убираем Терапевта с первого места если есть узкие специалисты
