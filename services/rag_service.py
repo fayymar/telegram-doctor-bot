@@ -5,16 +5,19 @@ from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-HF_API_URL = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
+HF_API_URL = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 
 
 def get_embedding(text: str) -> list:
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json"
+    }
     response = httpx.post(
         HF_API_URL,
         headers=headers,
-        json={"inputs": text},
+        json={"inputs": text, "normalize": True},
         timeout=30.0
     )
     if response.status_code == 200:
