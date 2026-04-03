@@ -51,6 +51,7 @@ def find_relevant_diseases(symptoms_text: str, limit: int = 5) -> str:
             return ""
 
         diseases = result.data
+        logger.info(f"RAG found diseases: {[d['disease_name'] for d in diseases]}")
         lines = ["Возможные диагнозы по симптомам:"]
         for d in diseases:
             line = f"- {d['disease_name']} ({d['code']})"
