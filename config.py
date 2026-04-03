@@ -12,13 +12,13 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is not set")
 
-# Groq API Key
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if not GROQ_API_KEY:
-    raise ValueError("GROQ_API_KEY environment variable is not set")
+# Anthropic API Key
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+if not ANTHROPIC_API_KEY:
+    raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
 
-# Модель Groq
-GROQ_MODEL = "deepseek-r1-distill-qwen-32b"
+# Модель Claude
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
 # Supabase credentials
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -39,4 +39,4 @@ logger.info(f"   - Supabase URL: {SUPABASE_URL}")
 logger.info(f"   - Port: {PORT}")
 logger.info(f"   - Debug mode: {DEBUG}")
 logger.info(f"   - FSM timeout: {FSM_TIMEOUT}s")
-logger.info(f"   - Groq model: {GROQ_MODEL}")
+logger.info(f"   - Claude model: {CLAUDE_MODEL}")

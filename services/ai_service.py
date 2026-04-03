@@ -1,9 +1,9 @@
 import re
 from typing import List, Optional
 
-import groq
+import anthropic
 
-from config import GROQ_API_KEY, GROQ_MODEL
+from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 from utils.logger import setup_logger
 from utils.json_parser import safe_parse_json_object, safe_parse_json_array, validate_json_structure
 
@@ -11,11 +11,11 @@ logger = setup_logger(__name__)
 
 
 class AIService:
-    """Сервис для работы с Groq"""
+    """Сервис для работы с Anthropic Claude"""
 
     def __init__(self):
-        self.client = groq.Groq(api_key=GROQ_API_KEY)
-        self.model_name = GROQ_MODEL
+        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        self.model_name = CLAUDE_MODEL
         logger.info("AIService initialized")
         logger.info(f"Model: {self.model_name}")
 
@@ -28,17 +28,14 @@ class AIService:
     ) -> str:
         logger.info(f"Calling model: {self.model_name}")
 
-        response = self.client.chat.completions.create(
+        response = self.client.messages.create(
             model=self.model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=temperature,
             max_tokens=max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
         )
 
-        result = response.choices[0].message.content.strip()
+        result = response.content[0].text.strip()
 
         if not result:
             raise RuntimeError(f"Empty response from model: {self.model_name}")
