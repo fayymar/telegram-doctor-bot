@@ -3,7 +3,7 @@ import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sentence_transformers import SentenceTransformer
+import httpx
 from supabase import create_client
 from dotenv import load_dotenv
 
@@ -13,7 +13,26 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-model = SentenceTransformer("all-MiniLM-L6-v2")
+
+HF_API_URL = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
+HF_TOKEN = os.getenv("HF_TOKEN", "")
+
+
+def get_embedding(text: str) -> list:
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    response = httpx.post(
+        HF_API_URL,
+        headers=headers,
+        json={"inputs": text},
+        timeout=30.0
+    )
+    if response.status_code == 200:
+        result = response.json()
+        if isinstance(result, list) and isinstance(result[0], list):
+            return result[0]
+        return result
+    return []
+
 
 with open("services/data/icd10_mapping.json", "r", encoding="utf-8") as f:
     icd10_data = json.load(f)
@@ -43,7 +62,13 @@ for code, data in icd10_data.items():
 
 texts = [item["text"] for item in batch]
 print("Генерируем эмбеддинги...")
-embeddings = model.encode(texts, batch_size=32, show_progress_bar=True)
+
+embeddings = []
+for i, text in enumerate(texts):
+    emb = get_embedding(text)
+    embeddings.append(emb)
+    if (i + 1) % 100 == 0:
+        print(f"Эмбеддинги: {i + 1}/{len(texts)}")
 
 print("Загружаем в Supabase...")
 for i, (item, embedding) in enumerate(zip(batch, embeddings)):
@@ -52,7 +77,7 @@ for i, (item, embedding) in enumerate(zip(batch, embeddings)):
         "disease_name": item["disease_name"],
         "symptoms": item["symptoms"],
         "specialist": item["specialist"],
-        "embedding": embedding.tolist()
+        "embedding": embedding
     }).execute()
 
     if (i + 1) % 100 == 0:

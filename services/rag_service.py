@@ -1,17 +1,28 @@
-from sentence_transformers import SentenceTransformer
+import os
+import httpx
 from database.connection import supabase_client
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-_model = None
+HF_API_URL = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
+HF_TOKEN = os.getenv("HF_TOKEN", "")
 
 
-def get_model():
-    global _model
-    if _model is None:
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
-    return _model
+def get_embedding(text: str) -> list:
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    response = httpx.post(
+        HF_API_URL,
+        headers=headers,
+        json={"inputs": text},
+        timeout=30.0
+    )
+    if response.status_code == 200:
+        result = response.json()
+        if isinstance(result, list) and isinstance(result[0], list):
+            return result[0]
+        return result
+    return []
 
 
 def find_relevant_diseases(symptoms_text: str, limit: int = 5) -> str:
@@ -20,8 +31,9 @@ def find_relevant_diseases(symptoms_text: str, limit: int = 5) -> str:
     Возвращает строку для вставки в промпт.
     """
     try:
-        model = get_model()
-        embedding = model.encode(symptoms_text).tolist()
+        embedding = get_embedding(symptoms_text)
+        if not embedding:
+            return ""
 
         result = supabase_client.rpc(
             "match_medical_embeddings",
