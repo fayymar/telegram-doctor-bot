@@ -18,7 +18,7 @@ if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY environment variable is not set")
 
 # Модель Groq
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "deepseek-r1-distill-qwen-32b"
 
 # Supabase credentials
 SUPABASE_URL = os.getenv("SUPABASE_URL")
