@@ -6,3 +6,5 @@ anthropic
 groq
 pydantic==2.9.2
 phonenumbers==8.13.26
+sentence-transformers==2.7.0
+torch==2.3.0
