@@ -13,6 +13,7 @@ from services.consultation_agent import (
     get_duration_question,
     get_anamnesis_questions,
     get_final_recommendation,
+    get_patient_history,
 )
 from database.connection import supabase_client
 from utils.logger import setup_logger
@@ -150,12 +151,16 @@ async def process_symptoms(message: Message, state: FSMContext):
     except Exception as e:
         logger.error(f"DB error getting profile: {e}", exc_info=True)
 
+    # Получаем историю предыдущих консультаций
+    patient_history = get_patient_history(message.from_user.id, supabase_client)
+
     # Шаг 2: Генерируем уточняющие вопросы
-    questions = parse_and_generate_questions(symptoms_text, user_profile)
+    questions = parse_and_generate_questions(symptoms_text, user_profile, patient_history)
 
     await state.update_data(
         symptoms=symptoms_text,
         user_profile=user_profile,
+        patient_history=patient_history,
         followup_questions=questions,
         followup_index=0,
         followup_answers=[],
@@ -337,8 +342,9 @@ async def _advance_anamnesis(msg, state: FSMContext, questions: list, next_index
     }
     user_profile = data.get("user_profile", {})
     user_id = data.get("user_id")
+    patient_history = data.get("patient_history", "")
 
-    result = get_final_recommendation(all_data, user_profile)
+    result = get_final_recommendation(all_data, user_profile, patient_history)
     duration = all_data["duration"]
 
     if user_id:

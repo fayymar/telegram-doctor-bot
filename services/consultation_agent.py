@@ -31,7 +31,7 @@ def check_red_flags(symptoms_text: str) -> dict:
         return {"red_flag": False}
 
 
-def parse_and_generate_questions(symptoms_text: str, user_profile: dict) -> list:
+def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient_history: str = "") -> list:
     """
     Шаг 2: Классифицирует симптомы и генерирует через Groq уточняющие вопросы (1-3).
     Учитывает возраст и пол из user_profile.
@@ -53,8 +53,20 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict) -> list
     else:
         num_questions = 3
 
+    history_block = ""
+    if patient_history:
+        history_block = f"""
+История предыдущих консультаций пациента:
+{patient_history}
+
+Учитывай эту историю при формировании вопросов:
+- Не спрашивай о хронических болезнях если они уже известны из истории
+- Обрати внимание на повторяющиеся симптомы
+- Если симптомы похожи на прошлые — уточни изменилось ли что-то
+"""
+
     system_prompt = f"""Ты — медицинский ассистент. Сгенерируй {num_questions} уточняющих вопроса для пациента (пол: {gender}, возраст: {age} лет, кластер: {primary_cluster}). Не спрашивай про давность симптомов.
-Генерируй ТОЛЬКО вопросы строго релевантные указанным симптомам. Если симптом — головная боль, спрашивай про характер боли, локализацию, сопутствующие симптомы головы/шеи. НЕ спрашивай про не связанные системы органов.
+Генерируй ТОЛЬКО вопросы строго релевантные указанным симптомам. Если симптом — головная боль, спрашивай про характер боли, локализацию, сопутствующие симптомы головы/шеи. НЕ спрашивай про не связанные системы органов.{history_block}
 Ответь ТОЛЬКО валидным JSON массивом без markdown, без ```json, без пояснений. Пример: [{{"question": "Где болит?", "options": ["Голова", "Живот", "Ничего из этого"]}}]"""
 
     user_message = f"Симптомы пациента: {symptoms_text}"
@@ -194,7 +206,41 @@ def _fallback_anamnesis() -> list:
     ]
 
 
-def get_final_recommendation(all_data: dict, user_profile: dict) -> dict:
+def get_patient_history(user_id: int, supabase_client) -> str:
+    """
+    Возвращает краткое резюме последних 5 консультаций пользователя в виде строки.
+    """
+    try:
+        resp = supabase_client.table("consultations").select(
+            "symptoms, recommended_doctor, created_at"
+        ).eq("user_id", user_id).order("created_at", desc=True).limit(5).execute()
+
+        if not resp.data:
+            return ""
+
+        lines = []
+        for row in resp.data:
+            date_str = row.get("created_at", "")[:10] if row.get("created_at") else "неизвестно"
+            doctor = row.get("recommended_doctor", "неизвестно")
+            symptoms_raw = row.get("symptoms", "")
+            symptoms_text = ""
+            try:
+                import json as _json
+                parsed = _json.loads(symptoms_raw)
+                history = parsed.get("history", [])
+                if history:
+                    symptoms_text = history[0].get("answer", "")
+            except Exception:
+                symptoms_text = symptoms_raw[:100] if symptoms_raw else ""
+            lines.append(f"- {date_str}: симптомы — {symptoms_text}, рекомендован — {doctor}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"get_patient_history error: {e}", exc_info=True)
+        return ""
+
+
+def get_final_recommendation(all_data: dict, user_profile: dict, patient_history: str = "") -> dict:
     """
     Шаг 5: Получает финальную рекомендацию через services/medical_router.py.
     all_data: {symptoms, followup_answers, duration, anamnesis_answers}
@@ -208,6 +254,8 @@ def get_final_recommendation(all_data: dict, user_profile: dict) -> dict:
     anamnesis_answers = all_data.get("anamnesis_answers", [])
 
     additional = []
+    if patient_history:
+        additional.append(f"История предыдущих консультаций пациента:\n{patient_history}")
     for qa in followup_answers:
         answer = qa.get("answer", "")
         if answer and answer not in ("Ничего из этого",):
@@ -228,7 +276,7 @@ def get_final_recommendation(all_data: dict, user_profile: dict) -> dict:
 
         # Если после удаления список пуст — оставляем fallback без Терапевта
         if not specialists:
-            specialists = [{"name": "Врач общей практики", "match_percent": 70, "reason": "Рекомендуется для первичного осмотра."}]
+            specialists = [{"name": "Терапевт", "match_percent": 100, "reason": "Симптомы требуют первичной общей консультации для направления к узкому специалисту"}]
 
         # Оставляем 1 главный + до 2 смежных
         specialists = specialists[:3]
