@@ -5,7 +5,7 @@ from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-HF_API_URL = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
+HF_API_URL = "https://router.huggingface.co/hf-inference/models/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/pipeline/feature-extraction"
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 
 
