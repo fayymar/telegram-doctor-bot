@@ -3,5 +3,6 @@ aiohttp==3.9.1
 python-dotenv==1.0.0
 supabase==2.10.0
 anthropic
+groq
 pydantic==2.9.2
 phonenumbers==8.13.26

@@ -3,21 +3,69 @@ from typing import List, Optional
 
 import anthropic
 
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, GROQ_API_KEY, GROQ_MODEL
 from utils.logger import setup_logger
 from utils.json_parser import safe_parse_json_object, safe_parse_json_array, validate_json_structure
 
 logger = setup_logger(__name__)
 
 
+def _is_anthropic_billing_or_unavailable(exc: Exception) -> bool:
+    """Возвращает True если ошибка связана с балансом или недоступностью Anthropic"""
+    if isinstance(exc, anthropic.APIStatusError):
+        # 402 Payment Required, 429 Rate Limit, 529 Overloaded
+        if exc.status_code in (402, 429, 529):
+            return True
+        # Billing-related messages
+        msg = str(exc).lower()
+        if any(kw in msg for kw in ("credit", "balance", "billing", "quota", "overload", "capacity")):
+            return True
+    if isinstance(exc, (anthropic.APIConnectionError, anthropic.APITimeoutError)):
+        return True
+    return False
+
+
 class AIService:
-    """Сервис для работы с Anthropic Claude"""
+    """Сервис для работы с Anthropic Claude (основной) и Groq (fallback)"""
 
     def __init__(self):
         self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         self.model_name = CLAUDE_MODEL
+
+        self._groq_client = None
+        if GROQ_API_KEY:
+            try:
+                from groq import Groq
+                self._groq_client = Groq(api_key=GROQ_API_KEY)
+                logger.info(f"Groq fallback enabled: {GROQ_MODEL}")
+            except ImportError:
+                logger.warning("groq package not installed — fallback disabled")
+
         logger.info("AIService initialized")
-        logger.info(f"Model: {self.model_name}")
+        logger.info(f"Primary model: {self.model_name}")
+
+    def _call_groq(
+        self,
+        system_prompt: str,
+        user_message: str,
+        temperature: float,
+        max_tokens: int
+    ) -> str:
+        logger.info(f"Falling back to Groq model: {GROQ_MODEL}")
+        response = self._groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        result = response.choices[0].message.content.strip()
+        if not result:
+            raise RuntimeError(f"Empty response from Groq model: {GROQ_MODEL}")
+        logger.info(f"Groq success | response length={len(result)}")
+        return result
 
     def _call_ai(
         self,
@@ -28,20 +76,27 @@ class AIService:
     ) -> str:
         logger.info(f"Calling model: {self.model_name}")
 
-        response = self.client.messages.create(
-            model=self.model_name,
-            max_tokens=max_tokens,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-        )
+        try:
+            response = self.client.messages.create(
+                model=self.model_name,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_message}],
+            )
 
-        result = response.content[0].text.strip()
+            result = response.content[0].text.strip()
 
-        if not result:
-            raise RuntimeError(f"Empty response from model: {self.model_name}")
+            if not result:
+                raise RuntimeError(f"Empty response from model: {self.model_name}")
 
-        logger.info(f"Model success: {self.model_name} | response length={len(result)}")
-        return result
+            logger.info(f"Model success: {self.model_name} | response length={len(result)}")
+            return result
+
+        except Exception as e:
+            if self._groq_client and _is_anthropic_billing_or_unavailable(e):
+                logger.warning(f"Anthropic unavailable ({type(e).__name__}: {e}), switching to Groq")
+                return self._call_groq(system_prompt, user_message, temperature, max_tokens)
+            raise
 
     def _extract_json_block(self, text: str) -> str:
         """

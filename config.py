@@ -20,6 +20,10 @@ if not ANTHROPIC_API_KEY:
 # Модель Claude
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
+# Groq API Key (fallback provider)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = "llama-3.3-70b-versatile"
+
 # Supabase credentials
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -40,3 +44,4 @@ logger.info(f"   - Port: {PORT}")
 logger.info(f"   - Debug mode: {DEBUG}")
 logger.info(f"   - FSM timeout: {FSM_TIMEOUT}s")
 logger.info(f"   - Claude model: {CLAUDE_MODEL}")
+logger.info(f"   - Groq fallback: {'enabled (' + GROQ_MODEL + ')' if GROQ_API_KEY else 'disabled (GROQ_API_KEY not set)'}")
