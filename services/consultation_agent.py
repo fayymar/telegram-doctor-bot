@@ -3,10 +3,6 @@ from typing import List, Dict
 from services.ai_service import AIService
 from services.symptom_parser import parse_symptoms
 from services.red_flags import detect_red_flags
-from services.medical_router import MedicalRouter
-# from services.rag_service import find_relevant_diseases
-
-medical_router = MedicalRouter()
 from utils.logger import setup_logger
 from utils.json_parser import safe_parse_json_array
 
@@ -254,7 +250,7 @@ def get_patient_history(user_id: int, supabase_client) -> str:
 
 def get_final_recommendation(all_data: dict, user_profile: dict, patient_history: str = "") -> dict:
     """
-    Шаг 5: Получает финальную рекомендацию через services/medical_router.py.
+    Шаг 5: Получает финальную рекомендацию через прямой вызов Claude Haiku.
     all_data: {symptoms, followup_answers, duration, anamnesis_answers}
     Учитывает возраст и пол из user_profile.
     НИКОГДА не рекомендует Терапевта первым.
@@ -265,36 +261,68 @@ def get_final_recommendation(all_data: dict, user_profile: dict, patient_history
     followup_answers = all_data.get("followup_answers", [])
     anamnesis_answers = all_data.get("anamnesis_answers", [])
 
-    # rag_context = find_relevant_diseases(symptoms)
+    age = user_profile.get("age", "не указан")
+    gender_raw = user_profile.get("gender", "")
+    gender = "мужчина" if gender_raw == "male" else ("женщина" if gender_raw == "female" else "не указан")
 
-    additional = []
-    # if rag_context:
-    #     additional.append(rag_context)
-    if patient_history:
-        additional.append(f"История предыдущих консультаций пациента:\n{patient_history}")
-    for qa in followup_answers:
-        answer = qa.get("answer", "")
-        if answer and answer not in ("Ничего из этого",):
-            additional.append(answer)
-    for qa in anamnesis_answers:
-        answer = qa.get("answer", "")
-        if answer and answer not in ("Нет", "Не знаю", "Не измерял"):
-            q_text = qa.get("question", "")
-            additional.append(f"{q_text}: {answer}" if q_text else answer)
+    followup_text = "; ".join(
+        qa.get("answer", "") for qa in followup_answers
+        if qa.get("answer") and qa.get("answer") not in ("Ничего из этого",)
+    )
+    anamnesis_text = "; ".join(
+        f"{qa.get('question', '')}: {qa.get('answer', '')}"
+        for qa in anamnesis_answers
+        if qa.get("answer") and qa.get("answer") not in ("Нет", "Не знаю", "Не измерял")
+    )
+
+    system_prompt = (
+        "Ты опытный врач-диагност. На основе собранных данных определи наиболее вероятного специалиста.\n\n"
+        f"Симптомы: {symptoms}\n"
+        f"Ответы пациента: {followup_text}\n"
+        f"Давность: {duration}\n"
+        f"Анамнез: {anamnesis_text}\n"
+        f"Профиль: пол {gender}, возраст {age}\n\n"
+        'Верни ТОЛЬКО JSON без markdown:\n'
+        '{\n'
+        '  "specialists": [\n'
+        '    {"name": "Эндокринолог", "percent": 75, "reason": "Причина"},\n'
+        '    {"name": "Нефролог", "percent": 25, "reason": "Причина"}\n'
+        '  ],\n'
+        '  "urgency": "medium",\n'
+        '  "urgency_reason": "Пояснение"\n'
+        '}\n\n'
+        "Правила:\n"
+        "- Максимум 3 специалиста\n"
+        "- Проценты в сумме = 100\n"
+        "- НЕ рекомендуй Терапевта\n"
+        "- Думай как врач — жажда+мочеиспускание+слабость+похудение = диабет = Эндокринолог"
+    )
 
     try:
-        result = medical_router.recommend_doctor(symptoms, duration, additional, user_profile)
+        raw = ai_service._call_ai(system_prompt, "Определи специалистов.", temperature=0.1, max_tokens=600)
+        cleaned = ai_service._extract_json_block(raw)
+        from utils.json_parser import safe_parse_json_object
+        parsed = safe_parse_json_object(cleaned, default={})
 
-        specialists = result.get("specialists", [])
+        specialists_raw = parsed.get("specialists", [])
+
+        # Конвертируем "percent" → "match_percent" для совместимости с consultation.py
+        specialists = []
+        for s in specialists_raw:
+            if not isinstance(s, dict) or not s.get("name"):
+                continue
+            specialists.append({
+                "name": str(s["name"]).strip(),
+                "match_percent": int(s.get("percent", s.get("match_percent", 50))),
+                "reason": str(s.get("reason", "")).strip(),
+            })
 
         # Принудительно удаляем Терапевта из списка
         specialists = [s for s in specialists if s.get("name") != "Терапевт"]
 
-        # Если после удаления список пуст — оставляем fallback без Терапевта
         if not specialists:
             specialists = [{"name": "Терапевт", "match_percent": 100, "reason": "Симптомы требуют первичной общей консультации для направления к узкому специалисту"}]
 
-        # Оставляем 1 главный + до 2 смежных
         specialists = specialists[:3]
 
         # Пересчитываем проценты пропорционально, чтобы сумма = 100%
@@ -302,12 +330,18 @@ def get_final_recommendation(all_data: dict, user_profile: dict, patient_history
         if total > 0:
             for s in specialists:
                 s["match_percent"] = round(s.get("match_percent", 0) * 100 / total)
-            # Корректируем округление: добавляем остаток к первому специалисту
             diff = 100 - sum(s["match_percent"] for s in specialists)
             specialists[0]["match_percent"] += diff
 
-        result["specialists"] = specialists
-        return result
+        urgency = parsed.get("urgency", "medium")
+        if urgency not in ("emergency", "high", "medium", "low"):
+            urgency = "medium"
+
+        return {
+            "specialists": specialists,
+            "urgency": urgency,
+            "urgency_reason": parsed.get("urgency_reason", "Рекомендуется обратиться к врачу."),
+        }
 
     except Exception as e:
         logger.error(f"get_final_recommendation error: {e}", exc_info=True)
