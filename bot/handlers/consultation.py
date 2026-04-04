@@ -23,16 +23,8 @@ router = Router()
 
 
 def _make_question_keyboard(options: list) -> InlineKeyboardMarkup:
-    """Кнопки по 2 в ряд, "✏️ Написать своё" отдельной строкой внизу."""
-    keyboard = []
-    row = []
-    for i, opt in enumerate(options):
-        row.append(InlineKeyboardButton(text=opt, callback_data=f"ans:{i}"))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
+    """Каждая кнопка на отдельной строке — текст не обрезается."""
+    keyboard = [[InlineKeyboardButton(text=opt, callback_data=f"ans:{i}")] for i, opt in enumerate(options)]
     keyboard.append([InlineKeyboardButton(text="✏️ Написать своё", callback_data="ans:custom")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -199,6 +191,7 @@ async def process_followup_callback(callback: CallbackQuery, state: FSMContext):
     next_index = index + 1
     await state.update_data(followup_answers=answers, followup_index=next_index, waiting_custom=False)
 
+    await callback.message.answer(f"✅ Ваш ответ: {answer_text}")
     await _advance_followup(callback.message, state, questions, next_index)
 
 
@@ -257,6 +250,7 @@ async def process_duration_callback(callback: CallbackQuery, state: FSMContext):
 
     await state.update_data(duration=duration, anamnesis_index=0, anamnesis_answers=[], waiting_custom_anamnesis=False)
 
+    await callback.message.answer(f"✅ Ваш ответ: {duration}")
     await callback.message.answer("⏳ Подготавливаю вопросы...")
     anamnesis_qs = get_anamnesis_questions(symptoms)
     await state.update_data(anamnesis_questions=anamnesis_qs)
@@ -293,6 +287,7 @@ async def process_anamnesis_callback(callback: CallbackQuery, state: FSMContext)
     next_index = index + 1
     await state.update_data(anamnesis_answers=answers, anamnesis_index=next_index, waiting_custom_anamnesis=False)
 
+    await callback.message.answer(f"✅ Ваш ответ: {answer_text}")
     await _advance_anamnesis(callback.message, state, questions, next_index)
 
 
