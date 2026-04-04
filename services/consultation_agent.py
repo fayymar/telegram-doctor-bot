@@ -4,7 +4,7 @@ from services.ai_service import AIService
 from services.symptom_parser import parse_symptoms
 from services.red_flags import detect_red_flags
 from services.medical_router import MedicalRouter
-from services.rag_service import find_relevant_diseases
+# from services.rag_service import find_relevant_diseases
 
 medical_router = MedicalRouter()
 from utils.logger import setup_logger
@@ -54,7 +54,7 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient
     else:
         num_questions = 3
 
-    rag_context = find_relevant_diseases(symptoms_text)
+    # rag_context = find_relevant_diseases(symptoms_text)
 
     history_block = ""
     if patient_history:
@@ -68,17 +68,17 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient
 - Если симптомы похожи на прошлые — уточни изменилось ли что-то
 """
 
-    rag_block = ""
-    if rag_context:
-        rag_block = f"""
-{rag_context}
-
-Используй эти диагнозы как ориентир при формировании вопросов.
-Задавай вопросы которые помогут ОТЛИЧИТЬ эти заболевания друг от друга.
-"""
+    # rag_block = ""
+    # if rag_context:
+    #     rag_block = f"""
+    # {rag_context}
+    #
+    # Используй эти диагнозы как ориентир при формировании вопросов.
+    # Задавай вопросы которые помогут ОТЛИЧИТЬ эти заболевания друг от друга.
+    # """
 
     system_prompt = f"""Ты — медицинский ассистент. Сгенерируй {num_questions} уточняющих вопроса для пациента (пол: {gender}, возраст: {age} лет, кластер: {primary_cluster}). Не спрашивай про давность симптомов.
-Генерируй ТОЛЬКО вопросы строго релевантные указанным симптомам. Если симптом — головная боль, спрашивай про характер боли, локализацию, сопутствующие симптомы головы/шеи. НЕ спрашивай про не связанные системы органов.{rag_block}{history_block}
+Генерируй ТОЛЬКО вопросы строго релевантные указанным симптомам. Если симптом — головная боль, спрашивай про характер боли, локализацию, сопутствующие симптомы головы/шеи. НЕ спрашивай про не связанные системы органов.{history_block}
 Ответь ТОЛЬКО валидным JSON массивом без markdown, без ```json, без пояснений. Пример: [{{"question": "Где болит?", "options": ["Голова", "Живот", "Ничего из этого"]}}]"""
 
     user_message = f"Симптомы пациента: {symptoms_text}"
@@ -265,11 +265,11 @@ def get_final_recommendation(all_data: dict, user_profile: dict, patient_history
     followup_answers = all_data.get("followup_answers", [])
     anamnesis_answers = all_data.get("anamnesis_answers", [])
 
-    rag_context = find_relevant_diseases(symptoms)
+    # rag_context = find_relevant_diseases(symptoms)
 
     additional = []
-    if rag_context:
-        additional.append(rag_context)
+    # if rag_context:
+    #     additional.append(rag_context)
     if patient_history:
         additional.append(f"История предыдущих консультаций пациента:\n{patient_history}")
     for qa in followup_answers:
