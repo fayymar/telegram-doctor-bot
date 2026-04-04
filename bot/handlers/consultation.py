@@ -3,6 +3,7 @@ from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 
 from bot.states import Consultation
@@ -24,14 +25,18 @@ router = Router()
 
 def _make_question_keyboard(options: list) -> InlineKeyboardMarkup:
     """Каждая кнопка на отдельной строке — текст не обрезается."""
-    keyboard = [[InlineKeyboardButton(text=opt, callback_data=f"ans:{i}")] for i, opt in enumerate(options)]
-    keyboard.append([InlineKeyboardButton(text="✏️ Написать своё", callback_data="ans:custom")])
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    builder = InlineKeyboardBuilder()
+    for i, opt in enumerate(options):
+        builder.row(InlineKeyboardButton(text=opt, callback_data=f"ans:{i}"))
+    builder.row(InlineKeyboardButton(text="✏️ Написать своё", callback_data="ans:custom"))
+    return builder.as_markup()
 
 
 def _make_duration_keyboard(options: list) -> InlineKeyboardMarkup:
-    keyboard = [[InlineKeyboardButton(text=opt, callback_data=f"dur:{i}")] for i, opt in enumerate(options)]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    builder = InlineKeyboardBuilder()
+    for i, opt in enumerate(options):
+        builder.row(InlineKeyboardButton(text=opt, callback_data=f"dur:{i}"))
+    return builder.as_markup()
 
 
 async def _save_consultation(user_id: int, all_data: dict, result: dict):
