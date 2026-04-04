@@ -1,8 +1,9 @@
 from aiogram.types import (
-    ReplyKeyboardMarkup, 
-    KeyboardButton, 
-    InlineKeyboardMarkup, 
-    InlineKeyboardButton
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    WebAppInfo
 )
 
 
@@ -15,7 +16,8 @@ def get_main_menu() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="📋 История")],
         [KeyboardButton(text="💊 Лекарства"), KeyboardButton(text="📓 Дневник")],
         [KeyboardButton(text="🗺 Найти клиники"), KeyboardButton(text="🔍 Найти специалиста")],
-        [KeyboardButton(text="💾 Экспорт анамнеза"), KeyboardButton(text="ℹ️ Помощь")]
+        [KeyboardButton(text="💾 Экспорт анамнеза"), KeyboardButton(text="ℹ️ Помощь")],
+        [KeyboardButton(text="🌐 Открыть приложение", web_app=WebAppInfo(url="https://sympto-med-app.vercel.app"))]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
