@@ -39,6 +39,13 @@ def _make_duration_keyboard(options: list) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def _is_duration_question(question_text: str) -> bool:
+    """Возвращает True если вопрос касается давности симптомов (чтобы не дублировать)."""
+    keywords = ["давн", "как долго", "когда появ", "сколько дней", "сколько времени", "как давно"]
+    text = question_text.lower()
+    return any(k in text for k in keywords)
+
+
 async def _save_consultation(user_id: int, all_data: dict, result: dict):
     try:
         specialists = result.get("specialists", [])
@@ -123,11 +130,12 @@ async def process_symptoms(message: Message, state: FSMContext):
     if not symptoms_text:
         return
 
-    await message.answer("⏳ Анализирую симптомы...")
+    analyzing_msg = await message.answer("⏳ Анализирую симптомы...")
 
     # Шаг 1: Красные флаги
     red = check_red_flags(symptoms_text)
     if red.get("red_flag"):
+        await analyzing_msg.delete()
         await state.clear()
         await message.answer(
             "🚨 <b>Немедленно вызовите скорую помощь!</b>\n\n"
@@ -151,8 +159,11 @@ async def process_symptoms(message: Message, state: FSMContext):
     # Получаем историю предыдущих консультаций
     patient_history = get_patient_history(message.from_user.id, supabase_client)
 
-    # Шаг 2: Генерируем уточняющие вопросы
+    # Шаг 2: Генерируем уточняющие вопросы (фильтруем вопросы о давности — они задаются отдельно)
     questions = parse_and_generate_questions(symptoms_text, user_profile, patient_history)
+    questions = [q for q in questions if not _is_duration_question(q.get("question", ""))]
+
+    await analyzing_msg.delete()
 
     await state.update_data(
         symptoms=symptoms_text,
@@ -163,14 +174,24 @@ async def process_symptoms(message: Message, state: FSMContext):
         followup_answers=[],
         waiting_custom=False,
     )
-    await state.set_state(Consultation.answering_followup)
 
-    q = questions[0]
-    await message.answer(
-        f"❓ {q['question']}",
-        reply_markup=_make_question_keyboard(q["options"]),
-        parse_mode="HTML",
-    )
+    if questions:
+        await state.set_state(Consultation.answering_followup)
+        q = questions[0]
+        await message.answer(
+            f"❓ {q['question']}",
+            reply_markup=_make_question_keyboard(q["options"]),
+            parse_mode="HTML",
+        )
+    else:
+        # Нет followup-вопросов — сразу к давности
+        duration_q = get_duration_question()
+        await state.set_state(Consultation.waiting_for_duration)
+        await message.answer(
+            f"❓ {duration_q['question']}",
+            reply_markup=_make_duration_keyboard(duration_q["options"]),
+            parse_mode="HTML",
+        )
 
 
 @router.callback_query(Consultation.answering_followup, F.data.startswith("ans:"))
@@ -196,7 +217,7 @@ async def process_followup_callback(callback: CallbackQuery, state: FSMContext):
     next_index = index + 1
     await state.update_data(followup_answers=answers, followup_index=next_index, waiting_custom=False)
 
-    await callback.message.answer(f"✅ Ваш ответ: {answer_text}")
+    await callback.message.answer(f"› {answer_text}")
     await _advance_followup(callback.message, state, questions, next_index)
 
 
@@ -255,9 +276,12 @@ async def process_duration_callback(callback: CallbackQuery, state: FSMContext):
 
     await state.update_data(duration=duration, anamnesis_index=0, anamnesis_answers=[], waiting_custom_anamnesis=False)
 
-    await callback.message.answer(f"✅ Ваш ответ: {duration}")
-    await callback.message.answer("⏳ Подготавливаю вопросы...")
+    await callback.message.answer(f"› {duration}")
+    preparing_msg = await callback.message.answer("⏳ Подготавливаю вопросы...")
     anamnesis_qs = get_anamnesis_questions(symptoms)
+    # Фильтруем вопросы о давности — они уже заданы
+    anamnesis_qs = [q for q in anamnesis_qs if not _is_duration_question(q.get("question", ""))]
+    await preparing_msg.delete()
     await state.update_data(anamnesis_questions=anamnesis_qs)
     await state.set_state(Consultation.answering_anamnesis)
 
@@ -292,7 +316,7 @@ async def process_anamnesis_callback(callback: CallbackQuery, state: FSMContext)
     next_index = index + 1
     await state.update_data(anamnesis_answers=answers, anamnesis_index=next_index, waiting_custom_anamnesis=False)
 
-    await callback.message.answer(f"✅ Ваш ответ: {answer_text}")
+    await callback.message.answer(f"› {answer_text}")
     await _advance_anamnesis(callback.message, state, questions, next_index)
 
 
