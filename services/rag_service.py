@@ -42,7 +42,7 @@ def find_relevant_diseases(symptoms_text: str, limit: int = 5) -> str:
             "match_medical_embeddings",
             {
                 "query_embedding": embedding,
-                "match_threshold": 0.3,
+                "match_threshold": 0.1,
                 "match_count": limit
             }
         ).execute()
