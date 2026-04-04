@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+import uuid
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -9,6 +11,14 @@ from config import BOT_TOKEN
 from bot.handlers import basic, profile, consultation, specialists, history, medications, health_diary, clinic_finder
 from bot.middlewares import FSMTimeoutMiddleware
 from utils.logger import setup_logger
+from services.consultation_agent import (
+    check_red_flags,
+    parse_and_generate_questions,
+    get_anamnesis_questions,
+    get_final_recommendation,
+    get_patient_history,
+)
+from database.connection import supabase_client
 
 
 # Настройка логирования
@@ -42,10 +52,217 @@ dp.include_router(specialists.router)  # Поиск специалистов
 dp.include_router(consultation.router) # Консультации (должен быть последним)
 
 
+# Хранилище сессий в памяти (для MVP)
+sessions: dict = {}
+
+ALLOWED_ORIGIN = "https://sympto-med-app.vercel.app"
+
+
+def json_response(data: dict, status: int = 200) -> web.Response:
+    return web.Response(
+        text=json.dumps(data, ensure_ascii=False),
+        status=status,
+        content_type="application/json",
+        headers={
+            "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        },
+    )
+
+
+@web.middleware
+async def cors_middleware(request: web.Request, handler):
+    if request.method == "OPTIONS":
+        return web.Response(
+            status=204,
+            headers={
+                "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            },
+        )
+    response = await handler(request)
+    response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
+
+
 # HTTP сервер для Render (Health check)
 async def health_check(request):
     """Endpoint для проверки здоровья сервиса"""
     return web.Response(text="OK", status=200)
+
+
+# ── API endpoints ──────────────────────────────────────────────
+
+async def api_consultation_start(request: web.Request) -> web.Response:
+    """POST /api/consultation/start"""
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({"error": "Invalid JSON"}, status=400)
+
+    user_id = body.get("user_id")
+    symptoms = body.get("symptoms", "").strip()
+    if not user_id or not symptoms:
+        return json_response({"error": "user_id and symptoms are required"}, status=400)
+
+    # Получаем профиль пользователя из Supabase
+    try:
+        resp = supabase_client.table("user_profiles").select("*").eq("user_id", user_id).single().execute()
+        user_profile = resp.data or {}
+    except Exception:
+        user_profile = {}
+
+    # История консультаций
+    patient_history = get_patient_history(user_id, supabase_client)
+
+    # Шаг 1: Красные флаги
+    red_flag_result = check_red_flags(symptoms)
+    red_flag = red_flag_result.get("red_flag", False)
+
+    # Шаг 2: Генерация уточняющих вопросов
+    questions = parse_and_generate_questions(symptoms, user_profile, patient_history)
+
+    session_id = str(uuid.uuid4())
+    sessions[session_id] = {
+        "user_id": user_id,
+        "symptoms": symptoms,
+        "user_profile": user_profile,
+        "questions": questions,
+        "answers": [],
+        "duration": None,
+        "anamnesis_questions": [],
+        "anamnesis_answers": [],
+    }
+
+    return json_response({
+        "session_id": session_id,
+        "questions": questions,
+        "red_flag": red_flag,
+    })
+
+
+async def api_consultation_answer(request: web.Request) -> web.Response:
+    """POST /api/consultation/answer"""
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({"error": "Invalid JSON"}, status=400)
+
+    session_id = body.get("session_id")
+    question_index = body.get("question_index")
+    answer = body.get("answer", "")
+
+    if not session_id or question_index is None:
+        return json_response({"error": "session_id and question_index are required"}, status=400)
+
+    session = sessions.get(session_id)
+    if not session:
+        return json_response({"error": "Session not found"}, status=404)
+
+    questions = session["questions"]
+
+    # Сохраняем ответ
+    q_text = questions[question_index]["question"] if question_index < len(questions) else ""
+    # Обновляем или добавляем запись по индексу
+    while len(session["answers"]) <= question_index:
+        session["answers"].append(None)
+    session["answers"][question_index] = {"question": q_text, "answer": answer}
+
+    next_index = question_index + 1
+    if next_index < len(questions):
+        return json_response({"next_question": questions[next_index], "ready_for_result": False})
+    else:
+        return json_response({"next_question": None, "ready_for_result": True})
+
+
+async def api_consultation_duration(request: web.Request) -> web.Response:
+    """POST /api/consultation/duration"""
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({"error": "Invalid JSON"}, status=400)
+
+    session_id = body.get("session_id")
+    duration = body.get("duration", "")
+
+    if not session_id:
+        return json_response({"error": "session_id is required"}, status=400)
+
+    session = sessions.get(session_id)
+    if not session:
+        return json_response({"error": "Session not found"}, status=404)
+
+    session["duration"] = duration
+
+    # Генерация анамнестических вопросов
+    anamnesis_questions = get_anamnesis_questions(session["symptoms"])
+    session["anamnesis_questions"] = anamnesis_questions
+
+    return json_response({"anamnesis_questions": anamnesis_questions})
+
+
+async def api_consultation_result(request: web.Request) -> web.Response:
+    """POST /api/consultation/result"""
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({"error": "Invalid JSON"}, status=400)
+
+    session_id = body.get("session_id")
+    if not session_id:
+        return json_response({"error": "session_id is required"}, status=400)
+
+    session = sessions.get(session_id)
+    if not session:
+        return json_response({"error": "Session not found"}, status=404)
+
+    # Анамнестические ответы могут быть переданы в теле запроса
+    anamnesis_answers = body.get("anamnesis_answers", session.get("anamnesis_answers", []))
+    session["anamnesis_answers"] = anamnesis_answers
+
+    all_data = {
+        "symptoms": session["symptoms"],
+        "followup_answers": [a for a in session["answers"] if a],
+        "duration": session["duration"] or "не указана",
+        "anamnesis_answers": anamnesis_answers,
+    }
+
+    recommendation = get_final_recommendation(all_data, session["user_profile"])
+
+    # Сохраняем в Supabase
+    try:
+        specialists = recommendation.get("specialists", [])
+        recommended_doctor = specialists[0]["name"] if specialists else "Терапевт"
+        supabase_client.table("consultations").insert({
+            "user_id": session["user_id"],
+            "symptoms": json.dumps({"text": session["symptoms"], "history": [a for a in session["answers"] if a]}, ensure_ascii=False),
+            "questions_answers": json.dumps(all_data, ensure_ascii=False),
+            "recommended_doctor": recommended_doctor,
+            "urgency_level": recommendation.get("urgency", "medium"),
+        }).execute()
+    except Exception as e:
+        logger.error(f"Failed to save consultation to Supabase: {e}", exc_info=True)
+
+    return json_response(recommendation)
+
+
+async def api_profile_get(request: web.Request) -> web.Response:
+    """GET /api/profile/{user_id}"""
+    user_id = request.match_info.get("user_id")
+    if not user_id:
+        return json_response({"error": "user_id is required"}, status=400)
+
+    try:
+        resp = supabase_client.table("user_profiles").select("*").eq("user_id", int(user_id)).single().execute()
+        profile_data = resp.data or {}
+        return json_response(profile_data)
+    except Exception as e:
+        logger.error(f"Failed to fetch profile for user {user_id}: {e}", exc_info=True)
+        return json_response({"error": "Profile not found"}, status=404)
 
 
 async def start_bot():
@@ -82,9 +299,23 @@ async def start_web_server():
     try:
         logger.info("🌐 Starting web server...")
 
-        app = web.Application()
+        app = web.Application(middlewares=[cors_middleware])
         app.router.add_get('/health', health_check)
         app.router.add_get('/', health_check)
+
+        # OPTIONS preflight для всех API маршрутов
+        app.router.add_route('OPTIONS', '/api/consultation/start', health_check)
+        app.router.add_route('OPTIONS', '/api/consultation/answer', health_check)
+        app.router.add_route('OPTIONS', '/api/consultation/duration', health_check)
+        app.router.add_route('OPTIONS', '/api/consultation/result', health_check)
+        app.router.add_route('OPTIONS', '/api/profile/{user_id}', health_check)
+
+        # API эндпоинты
+        app.router.add_post('/api/consultation/start', api_consultation_start)
+        app.router.add_post('/api/consultation/answer', api_consultation_answer)
+        app.router.add_post('/api/consultation/duration', api_consultation_duration)
+        app.router.add_post('/api/consultation/result', api_consultation_result)
+        app.router.add_get('/api/profile/{user_id}', api_profile_get)
 
         runner = web.AppRunner(app)
         await runner.setup()
