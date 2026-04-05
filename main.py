@@ -55,7 +55,11 @@ dp.include_router(consultation.router) # Консультации (должен 
 # Хранилище сессий в памяти (для MVP)
 sessions: dict = {}
 
-ALLOWED_ORIGIN = "https://sympto-med-app.vercel.app"
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+}
 
 
 def json_response(data: dict, status: int = 200) -> web.Response:
@@ -63,29 +67,22 @@ def json_response(data: dict, status: int = 200) -> web.Response:
         text=json.dumps(data, ensure_ascii=False),
         status=status,
         content_type="application/json",
-        headers={
-            "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        },
+        headers=CORS_HEADERS,
     )
+
+
+async def options_handler(request: web.Request) -> web.Response:
+    """Универсальный обработчик preflight OPTIONS запросов"""
+    return web.Response(status=204, headers=CORS_HEADERS)
 
 
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
     if request.method == "OPTIONS":
-        return web.Response(
-            status=204,
-            headers={
-                "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            },
-        )
+        return web.Response(status=204, headers=CORS_HEADERS)
     response = await handler(request)
-    response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    for key, value in CORS_HEADERS.items():
+        response.headers[key] = value
     return response
 
 
@@ -303,12 +300,8 @@ async def start_web_server():
         app.router.add_get('/health', health_check)
         app.router.add_get('/', health_check)
 
-        # OPTIONS preflight для всех API маршрутов
-        app.router.add_route('OPTIONS', '/api/consultation/start', health_check)
-        app.router.add_route('OPTIONS', '/api/consultation/answer', health_check)
-        app.router.add_route('OPTIONS', '/api/consultation/duration', health_check)
-        app.router.add_route('OPTIONS', '/api/consultation/result', health_check)
-        app.router.add_route('OPTIONS', '/api/profile/{user_id}', health_check)
+        # OPTIONS preflight для всех /api/* маршрутов
+        app.router.add_route('OPTIONS', '/api/{path_info:.*}', options_handler)
 
         # API эндпоинты
         app.router.add_post('/api/consultation/start', api_consultation_start)
