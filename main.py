@@ -98,13 +98,26 @@ async def api_consultation_start(request: web.Request) -> web.Response:
     """POST /api/consultation/start"""
     try:
         body = await request.json()
-    except Exception:
-        return json_response({"error": "Invalid JSON"}, status=400)
+    except Exception as e:
+        logger.warning(f"Consultation start: failed to parse JSON body: {e}")
+        return json_response({"error": "Invalid JSON body"}, status=400)
+
+    logger.info(f"Consultation start request body: {body}")
 
     user_id = body.get("user_id")
     symptoms = body.get("symptoms", "").strip()
-    if not user_id or not symptoms:
-        return json_response({"error": "user_id and symptoms are required"}, status=400)
+
+    missing = []
+    if not user_id:
+        missing.append("user_id")
+    if not symptoms:
+        missing.append("symptoms")
+    if missing:
+        logger.warning(f"Consultation start: missing fields {missing}, body={body}")
+        return json_response(
+            {"error": f"Missing required fields: {', '.join(missing)}"},
+            status=400,
+        )
 
     # Получаем профиль пользователя из Supabase
     try:
