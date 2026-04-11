@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
@@ -114,6 +114,23 @@ async def cmd_cancel(message: Message, state: FSMContext):
 async def help_button(message: Message):
     """Обработчик кнопки Помощь"""
     await cmd_help(message)
+
+
+@router.message(Command("heartrate"))
+async def cmd_heartrate(message: Message):
+    """Обработчик команды /heartrate"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="⌚️ Установить Shortcut",
+            url="https://www.icloud.com/shortcuts/bd9546f856ad49a5950233c6fcab6a2d"
+        )]
+    ])
+    await message.answer(
+        "❤️ Подключение Apple Watch\n\n"
+        "Нажмите кнопку ниже чтобы установить Shortcut на iPhone — он автоматически отправит ваш пульс с Apple Watch.\n\n"
+        "После установки просто запускайте его когда хотите поделиться показаниями.",
+        reply_markup=keyboard,
+    )
 
 
 # История консультаций теперь обрабатывается в отдельном модуле bot/handlers/history.py
