@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
+from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -275,6 +276,46 @@ async def api_profile_get(request: web.Request) -> web.Response:
         return json_response({"error": "Profile not found"}, status=404)
 
 
+async def api_health_heartrate(request: web.Request) -> web.Response:
+    """POST /api/health/heartrate"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        heartrate = data.get('heartrate')
+        timestamp = data.get('timestamp', datetime.utcnow().isoformat())
+
+        if not heartrate:
+            return json_response({'error': 'heartrate required'}, status=400)
+
+        # Сохраняем в Supabase таблицу health_metrics
+        supabase_client.table('health_metrics').insert({
+            'user_id': user_id,
+            'metric_type': 'heartrate',
+            'value': float(heartrate),
+            'unit': 'bpm',
+            'recorded_at': timestamp,
+            'source': 'apple_watch'
+        }).execute()
+
+        # Если есть user_id — отправляем уведомление в Telegram
+        if user_id:
+            hr = float(heartrate)
+            if hr > 120 or hr < 50:
+                msg = f"🚨 Пульс: {hr:.0f} уд/мин! Значительно выше нормы. Рекомендуем обратиться к врачу."
+            elif hr > 100:
+                msg = f"❤️ Пульс получен: {hr:.0f} уд/мин ⚠️ Немного выше нормы. Отдохните."
+            else:
+                msg = f"❤️ Пульс получен: {hr:.0f} уд/мин ✅ В норме"
+
+            await bot.send_message(user_id, msg)
+
+        return json_response({'status': 'ok', 'message': f'Пульс сохранён: {heartrate} уд/мин'})
+
+    except Exception as e:
+        logger.error(f"Health heartrate error: {e}")
+        return json_response({'error': str(e)}, status=500)
+
+
 async def start_bot():
     """Запуск бота с автоматическим перезапуском при ошибках"""
     retry_delay = 5
@@ -322,6 +363,7 @@ async def start_web_server():
         app.router.add_post('/api/consultation/duration', api_consultation_duration)
         app.router.add_post('/api/consultation/result', api_consultation_result)
         app.router.add_get('/api/profile/{user_id}', api_profile_get)
+        app.router.add_post('/api/health/heartrate', api_health_heartrate)
 
         runner = web.AppRunner(app)
         await runner.setup()
