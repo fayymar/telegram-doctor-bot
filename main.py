@@ -287,15 +287,19 @@ async def api_health_heartrate(request: web.Request) -> web.Response:
         if not heartrate:
             return json_response({'error': 'heartrate required'}, status=400)
 
-        # Сохраняем в Supabase таблицу health_metrics
-        supabase_client.table('health_metrics').insert({
-            'user_id': user_id,
+        # Формируем запись — user_id включаем только если он передан
+        record = {
             'metric_type': 'heartrate',
             'value': float(heartrate),
             'unit': 'bpm',
             'recorded_at': timestamp,
             'source': 'apple_watch'
-        }).execute()
+        }
+        if user_id:
+            record['user_id'] = user_id
+
+        # Сохраняем в Supabase таблицу health_metrics
+        supabase_client.table('health_metrics').insert(record).execute()
 
         # Если есть user_id — отправляем уведомление в Telegram
         if user_id:
