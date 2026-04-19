@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
@@ -119,17 +119,13 @@ async def help_button(message: Message):
 @router.message(Command("heartrate"))
 async def cmd_heartrate(message: Message):
     """Обработчик команды /heartrate"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="⌚️ Установить Shortcut",
-            url="https://www.icloud.com/shortcuts/bd9546f856ad49a5950233c6fcab6a2d"
-        )]
-    ])
     await message.answer(
-        "❤️ Подключение Apple Watch\n\n"
-        "Нажмите кнопку ниже чтобы установить Shortcut на iPhone — он автоматически отправит ваш пульс с Apple Watch.\n\n"
-        "После установки просто запускайте его когда хотите поделиться показаниями.",
-        reply_markup=keyboard,
+        "❤️ Отслеживание пульса\n\n"
+        "Откройте приложение СимптоМед чтобы:\n"
+        "- Отправить текущий пульс с Apple Watch\n"
+        "- Посмотреть историю измерений\n"
+        "- Настроить автоматическую отправку\n\n"
+        'Нажмите кнопку "СимптоМед" внизу экрана (рядом с полем ввода) чтобы открыть приложение.'
     )
 
 
