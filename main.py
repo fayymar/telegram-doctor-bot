@@ -276,10 +276,35 @@ async def api_profile_get(request: web.Request) -> web.Response:
         return json_response({"error": "Profile not found"}, status=404)
 
 
+async def api_health_heartrate_get(request: web.Request) -> web.Response:
+    """GET /api/health/heartrate/{user_id}"""
+    user_id = request.match_info.get('user_id')
+    if not user_id:
+        return json_response({'error': 'user_id is required'}, status=400)
+
+    try:
+        resp = (
+            supabase_client.table('health_metrics')
+            .select('value, recorded_at, source')
+            .eq('user_id', user_id)
+            .eq('metric_type', 'heartrate')
+            .order('recorded_at', desc=True)
+            .limit(10)
+            .execute()
+        )
+        records = resp.data or []
+        logger.info(f"Heartrate GET for user_id={user_id}: found {len(records)} records")
+        return json_response({'records': records, 'has_data': len(records) > 0})
+    except Exception as e:
+        logger.error(f"Heartrate GET error for user_id={user_id}: {e}", exc_info=True)
+        return json_response({'error': str(e)}, status=500)
+
+
 async def api_health_heartrate(request: web.Request) -> web.Response:
     """POST /api/health/heartrate"""
     try:
         data = await request.json()
+        logger.info(f"Received heartrate POST: {data}")
         user_id = data.get('user_id')
         heartrate = data.get('heartrate')
         timestamp = data.get('timestamp', datetime.utcnow().isoformat())
@@ -367,6 +392,7 @@ async def start_web_server():
         app.router.add_post('/api/consultation/duration', api_consultation_duration)
         app.router.add_post('/api/consultation/result', api_consultation_result)
         app.router.add_get('/api/profile/{user_id}', api_profile_get)
+        app.router.add_get('/api/health/heartrate/{user_id}', api_health_heartrate_get)
         app.router.add_post('/api/health/heartrate', api_health_heartrate)
 
         runner = web.AppRunner(app)
