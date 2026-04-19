@@ -276,6 +276,20 @@ async def api_profile_get(request: web.Request) -> web.Response:
         return json_response({"error": "Profile not found"}, status=404)
 
 
+def _fetch_heartrate_records(user_id: str) -> list:
+    """Выполняет запрос к Supabase. Использует глобальный supabase_client."""
+    resp = (
+        supabase_client.table('health_metrics')
+        .select('value, recorded_at, source')
+        .eq('user_id', user_id)
+        .eq('metric_type', 'heartrate')
+        .order('recorded_at', desc=True)
+        .limit(10)
+        .execute()
+    )
+    return resp.data or []
+
+
 async def api_health_heartrate_get(request: web.Request) -> web.Response:
     """GET /api/health/heartrate/{user_id}"""
     user_id = request.match_info.get('user_id')
@@ -283,21 +297,22 @@ async def api_health_heartrate_get(request: web.Request) -> web.Response:
         return json_response({'error': 'user_id is required'}, status=400)
 
     try:
-        resp = (
-            supabase_client.table('health_metrics')
-            .select('value, recorded_at, source')
-            .eq('user_id', user_id)
-            .eq('metric_type', 'heartrate')
-            .order('recorded_at', desc=True)
-            .limit(10)
-            .execute()
-        )
-        records = resp.data or []
-        logger.info(f"Heartrate GET for user_id={user_id}: found {len(records)} records")
-        return json_response({'records': records, 'has_data': len(records) > 0})
+        records = _fetch_heartrate_records(user_id)
     except Exception as e:
-        logger.error(f"Heartrate GET error for user_id={user_id}: {e}", exc_info=True)
-        return json_response({'error': str(e)}, status=500)
+        if 'Name or service not known' in str(e):
+            logger.warning(f"Heartrate GET DNS error for user_id={user_id}, retrying in 1s: {e}")
+            await asyncio.sleep(1)
+            try:
+                records = _fetch_heartrate_records(user_id)
+            except Exception as retry_e:
+                logger.error(f"Heartrate GET retry failed for user_id={user_id}: {retry_e}", exc_info=True)
+                return json_response({'error': str(retry_e)}, status=500)
+        else:
+            logger.error(f"Heartrate GET error for user_id={user_id}: {e}", exc_info=True)
+            return json_response({'error': str(e)}, status=500)
+
+    logger.info(f"Heartrate GET for user_id={user_id}: found {len(records)} records")
+    return json_response({'records': records, 'has_data': len(records) > 0})
 
 
 async def api_health_heartrate(request: web.Request) -> web.Response:
