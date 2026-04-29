@@ -360,6 +360,154 @@ async def api_health_heartrate(request: web.Request) -> web.Response:
         return json_response({'error': str(e)}, status=500)
 
 
+def _interpret_heartrate(hr: float) -> str:
+    if hr < 50 or hr > 120:
+        return f"❤️ Пульс: {hr:.0f} уд/мин 🚨 Критично"
+    if hr > 100:
+        return f"❤️ Пульс: {hr:.0f} уд/мин ⚠️ Повышен"
+    return f"❤️ Пульс: {hr:.0f} уд/мин ✅ В норме"
+
+
+def _interpret_blood_pressure(systolic: float, diastolic: float) -> str:
+    if systolic >= 140 or diastolic >= 90:
+        label = "🚨 Высокое"
+    elif systolic >= 130 or diastolic >= 85:
+        label = "⚠️ Повышенное"
+    elif systolic < 90 or diastolic < 60:
+        label = "⚠️ Пониженное"
+    else:
+        label = "✅ Норма"
+    return f"🩺 Давление: {systolic:.0f}/{diastolic:.0f} мм рт.ст. {label}"
+
+
+def _interpret_spo2(spo2: float) -> str:
+    if spo2 < 95:
+        return f"🫁 SpO2: {spo2:.0f}% ⚠️ Низкая насыщенность — обратите внимание"
+    return f"🫁 SpO2: {spo2:.0f}% ✅ Норма"
+
+
+async def api_health_metrics_post(request: web.Request) -> web.Response:
+    """POST /api/health/metrics — универсальный приём показателей здоровья"""
+    try:
+        data = await request.json()
+        logger.info(f"Received health metrics POST: {data}")
+    except Exception:
+        return json_response({'error': 'Invalid JSON'}, status=400)
+
+    user_id = data.get('user_id')
+    timestamp = data.get('timestamp') or datetime.utcnow().isoformat()
+
+    METRIC_MAP = [
+        ('heartrate',  'heartrate',              'bpm'),
+        ('systolic',   'blood_pressure_systolic', 'mmHg'),
+        ('diastolic',  'blood_pressure_diastolic','mmHg'),
+        ('spo2',       'spo2',                   '%'),
+        ('steps',      'steps',                  'steps'),
+    ]
+
+    records_to_insert = []
+    received = {}
+    for field, metric_type, unit in METRIC_MAP:
+        raw = data.get(field)
+        if raw is None or raw == 0:
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        row = {
+            'metric_type': metric_type,
+            'value': value,
+            'unit': unit,
+            'recorded_at': timestamp,
+            'source': 'apple_watch',
+        }
+        if user_id:
+            row['user_id'] = user_id
+        records_to_insert.append(row)
+        received[field] = value
+
+    if not records_to_insert:
+        return json_response({'error': 'No valid metrics provided'}, status=400)
+
+    try:
+        supabase_client.table('health_metrics').insert(records_to_insert).execute()
+    except Exception as e:
+        logger.error(f"Health metrics insert error: {e}", exc_info=True)
+        return json_response({'error': str(e)}, status=500)
+
+    # Уведомление в Telegram
+    if user_id:
+        lines = ["📊 Получены показатели здоровья:\n"]
+        all_ok = True
+
+        if 'heartrate' in received:
+            line = _interpret_heartrate(received['heartrate'])
+            lines.append(line)
+            if '🚨' in line or '⚠️' in line:
+                all_ok = False
+
+        if 'systolic' in received and 'diastolic' in received:
+            line = _interpret_blood_pressure(received['systolic'], received['diastolic'])
+            lines.append(line)
+            if '🚨' in line or '⚠️' in line:
+                all_ok = False
+        elif 'systolic' in received:
+            lines.append(f"🩺 Систолическое: {received['systolic']:.0f} мм рт.ст.")
+        elif 'diastolic' in received:
+            lines.append(f"🩺 Диастолическое: {received['diastolic']:.0f} мм рт.ст.")
+
+        if 'spo2' in received:
+            line = _interpret_spo2(received['spo2'])
+            lines.append(line)
+            if '⚠️' in line:
+                all_ok = False
+
+        if 'steps' in received:
+            lines.append(f"👣 Шаги: {int(received['steps'])} за день")
+
+        lines.append("\nВсе показатели в норме." if all_ok else "\nЕсть показатели, требующие внимания.")
+
+        try:
+            await bot.send_message(user_id, "\n".join(lines))
+        except Exception as e:
+            logger.error(f"Telegram notify error for user_id={user_id}: {e}")
+
+    saved_count = len(records_to_insert)
+    return json_response({'status': 'ok', 'saved': saved_count})
+
+
+async def api_health_metrics_get(request: web.Request) -> web.Response:
+    """GET /api/health/metrics/{user_id}?type=metric_type&limit=10"""
+    user_id = request.match_info.get('user_id')
+    if not user_id:
+        return json_response({'error': 'user_id is required'}, status=400)
+
+    metric_type = request.rel_url.query.get('type')
+    try:
+        limit = int(request.rel_url.query.get('limit', 10))
+    except ValueError:
+        limit = 10
+
+    try:
+        query = (
+            supabase_client.table('health_metrics')
+            .select('metric_type, value, unit, recorded_at, source')
+            .eq('user_id', user_id)
+            .order('recorded_at', desc=True)
+            .limit(limit)
+        )
+        if metric_type:
+            query = query.eq('metric_type', metric_type)
+        resp = query.execute()
+        records = resp.data or []
+        logger.info(f"Health metrics GET user_id={user_id} type={metric_type}: {len(records)} records")
+        return json_response({'records': records, 'has_data': len(records) > 0})
+    except Exception as e:
+        logger.error(f"Health metrics GET error user_id={user_id}: {e}", exc_info=True)
+        return json_response({'error': str(e)}, status=500)
+
+
 async def start_bot():
     """Запуск бота с автоматическим перезапуском при ошибках"""
     retry_delay = 5
@@ -409,6 +557,8 @@ async def start_web_server():
         app.router.add_get('/api/profile/{user_id}', api_profile_get)
         app.router.add_get('/api/health/heartrate/{user_id}', api_health_heartrate_get)
         app.router.add_post('/api/health/heartrate', api_health_heartrate)
+        app.router.add_post('/api/health/metrics', api_health_metrics_post)
+        app.router.add_get('/api/health/metrics/{user_id}', api_health_metrics_get)
 
         runner = web.AppRunner(app)
         await runner.setup()
