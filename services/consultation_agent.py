@@ -1,4 +1,5 @@
-from typing import List, Dict
+from datetime import datetime, timedelta, timezone
+from typing import List, Dict, Optional
 
 from services.ai_service import AIService
 from services.symptom_parser import parse_symptoms
@@ -11,21 +12,171 @@ logger = setup_logger(__name__)
 ai_service = AIService()
 
 
-def check_red_flags(symptoms_text: str) -> dict:
+# ── Health metrics helpers ────────────────────────────────────────────────────
+
+def get_recent_health_metrics(user_id: int, supabase_client, hours: int = 24) -> dict:
+    """
+    Возвращает последнюю запись каждого типа метрики за последние N часов.
+    is_fresh = True если запись моложе 6 часов.
+    """
+    result: dict = {
+        "heartrate": None,
+        "blood_pressure": None,
+        "spo2": None,
+        "steps": None,
+        "has_any_data": False,
+    }
+    try:
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        fresh_cutoff = (datetime.utcnow() - timedelta(hours=6)).isoformat()
+
+        resp = (
+            supabase_client.table("health_metrics")
+            .select("metric_type, value, recorded_at")
+            .eq("user_id", user_id)
+            .in_("metric_type", [
+                "heartrate", "blood_pressure_systolic",
+                "blood_pressure_diastolic", "spo2", "steps",
+            ])
+            .gte("recorded_at", cutoff)
+            .order("recorded_at", desc=True)
+            .execute()
+        )
+
+        rows = resp.data or []
+        seen: dict = {}
+        for row in rows:
+            mt = row["metric_type"]
+            if mt not in seen:
+                seen[mt] = row
+
+        def _fresh(recorded_at: str) -> bool:
+            return recorded_at >= fresh_cutoff
+
+        if "heartrate" in seen:
+            r = seen["heartrate"]
+            result["heartrate"] = {
+                "value": r["value"],
+                "recorded_at": r["recorded_at"],
+                "is_fresh": _fresh(r["recorded_at"]),
+            }
+            result["has_any_data"] = True
+
+        sys_row = seen.get("blood_pressure_systolic")
+        dia_row = seen.get("blood_pressure_diastolic")
+        if sys_row:
+            recorded_at = sys_row["recorded_at"]
+            result["blood_pressure"] = {
+                "systolic": sys_row["value"],
+                "diastolic": dia_row["value"] if dia_row else None,
+                "recorded_at": recorded_at,
+                "is_fresh": _fresh(recorded_at),
+            }
+            result["has_any_data"] = True
+
+        if "spo2" in seen:
+            r = seen["spo2"]
+            result["spo2"] = {
+                "value": r["value"],
+                "recorded_at": r["recorded_at"],
+                "is_fresh": _fresh(r["recorded_at"]),
+            }
+            result["has_any_data"] = True
+
+        if "steps" in seen:
+            r = seen["steps"]
+            result["steps"] = {
+                "value": r["value"],
+                "recorded_at": r["recorded_at"],
+                "is_fresh": _fresh(r["recorded_at"]),
+            }
+            result["has_any_data"] = True
+
+    except Exception as e:
+        logger.error(f"get_recent_health_metrics error user_id={user_id}: {e}", exc_info=True)
+
+    return result
+
+
+def _time_ago(recorded_at: str) -> str:
+    """Возвращает человекочитаемое время назад."""
+    try:
+        dt = datetime.fromisoformat(recorded_at.replace("Z", "").split("+")[0])
+        diff = datetime.utcnow() - dt
+        minutes = int(diff.total_seconds() / 60)
+        if minutes < 60:
+            return f"{minutes} мин назад"
+        hours = minutes // 60
+        if hours < 24:
+            return f"{hours} ч назад"
+        return f"{hours // 24} дн назад"
+    except Exception:
+        return "недавно"
+
+
+def _format_metrics_for_prompt(metrics: dict) -> str:
+    """Форматирует метрики для вставки в system prompt."""
+    if not metrics or not metrics.get("has_any_data"):
+        return ""
+
+    lines = ["Доступные показатели здоровья пациента:"]
+
+    hr = metrics.get("heartrate")
+    if hr:
+        fresh = "✅ свежие" if hr["is_fresh"] else "⚠️ устаревшие"
+        lines.append(f"- Пульс: {hr['value']:.0f} уд/мин ({_time_ago(hr['recorded_at'])}) {fresh}")
+
+    bp = metrics.get("blood_pressure")
+    if bp:
+        fresh = "✅ свежие" if bp["is_fresh"] else "⚠️ устаревшие"
+        if bp.get("diastolic") is not None:
+            lines.append(f"- Давление: {bp['systolic']:.0f}/{bp['diastolic']:.0f} мм рт.ст. ({_time_ago(bp['recorded_at'])}) {fresh}")
+        else:
+            lines.append(f"- Давление (сист.): {bp['systolic']:.0f} мм рт.ст. ({_time_ago(bp['recorded_at'])}) {fresh}")
+
+    spo2 = metrics.get("spo2")
+    if spo2:
+        fresh = "✅ свежие" if spo2["is_fresh"] else "⚠️ устаревшие"
+        lines.append(f"- SpO2: {spo2['value']:.0f}% ({_time_ago(spo2['recorded_at'])}) {fresh}")
+
+    steps = metrics.get("steps")
+    if steps:
+        lines.append(f"- Шаги: {int(steps['value'])} сегодня")
+
+    lines.append(
+        "\nУчитывай эти показатели при анализе симптомов. "
+        "Если для точной диагностики нужны свежие измерения — включи в JSON-ответ поле "
+        "'needs_fresh_metrics' со списком из: heartrate, blood_pressure, spo2."
+    )
+    return "\n".join(lines)
+
+
+def check_red_flags(symptoms_text: str, health_metrics: Optional[dict] = None) -> dict:
     """
     Шаг 1: Проверяет наличие красных флагов (экстренных симптомов).
-    Использует services/red_flags.py.
-    Возвращает {"red_flag": True} если опасно, иначе {"red_flag": False}.
+    Использует services/red_flags.py + опциональные показатели здоровья.
+    Возвращает {"red_flag": bool, "needs_fresh_metrics": [...]}.
     """
+    needs_fresh: list = []
     try:
         parsed = parse_symptoms(symptoms_text)
         result = detect_red_flags(parsed, None)
-        if result.get("urgency") == "emergency":
-            return {"red_flag": True}
-        return {"red_flag": False}
+        red_flag = result.get("urgency") == "emergency"
+
+        # Проверяем метрики — могут добавить красный флаг
+        if health_metrics and health_metrics.get("has_any_data"):
+            hr = health_metrics.get("heartrate")
+            if hr and (hr["value"] > 120 or hr["value"] < 50):
+                red_flag = True
+
+            spo2 = health_metrics.get("spo2")
+            if spo2 and spo2["value"] < 90:
+                red_flag = True
+
+        return {"red_flag": red_flag, "needs_fresh_metrics": needs_fresh}
     except Exception as e:
         logger.error(f"check_red_flags error: {e}", exc_info=True)
-        return {"red_flag": False}
+        return {"red_flag": False, "needs_fresh_metrics": []}
 
 
 def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient_history: str = "") -> list:
@@ -248,13 +399,18 @@ def get_patient_history(user_id: int, supabase_client) -> str:
         return ""
 
 
-def get_final_recommendation(all_data: dict, user_profile: dict, patient_history: str = "") -> dict:
+def get_final_recommendation(
+    all_data: dict,
+    user_profile: dict,
+    patient_history: str = "",
+    health_metrics: Optional[dict] = None,
+) -> dict:
     """
-    Шаг 5: Получает финальную рекомендацию через прямой вызов Claude Haiku.
+    Шаг 5: Получает финальную рекомендацию через прямой вызов AI.
     all_data: {symptoms, followup_answers, duration, anamnesis_answers}
-    Учитывает возраст и пол из user_profile.
+    Учитывает возраст, пол из user_profile и показатели здоровья.
     НИКОГДА не рекомендует Терапевта первым.
-    Возвращает: 1 главный специалист + 1-2 смежных с процентами.
+    Возвращает: specialists, urgency, recommendation, needs_fresh_metrics.
     """
     symptoms = all_data.get("symptoms", "")
     duration = all_data.get("duration", "не указана")
@@ -275,31 +431,40 @@ def get_final_recommendation(all_data: dict, user_profile: dict, patient_history
         if qa.get("answer") and qa.get("answer") not in ("Нет", "Не знаю", "Не измерял")
     )
 
+    metrics_block = _format_metrics_for_prompt(health_metrics) if health_metrics else ""
+
     system_prompt = (
         "Ты опытный врач-диагност. На основе собранных данных определи наиболее вероятного специалиста.\n\n"
         f"Симптомы: {symptoms}\n"
         f"Ответы пациента: {followup_text}\n"
         f"Давность: {duration}\n"
         f"Анамнез: {anamnesis_text}\n"
-        f"Профиль: пол {gender}, возраст {age}\n\n"
-        'Верни ТОЛЬКО JSON без markdown:\n'
+        f"Профиль: пол {gender}, возраст {age}\n"
+    )
+    if metrics_block:
+        system_prompt += f"\n{metrics_block}\n"
+
+    system_prompt += (
+        '\nВерни ТОЛЬКО JSON без markdown:\n'
         '{\n'
         '  "specialists": [\n'
         '    {"name": "Эндокринолог", "percent": 75, "reason": "Причина"},\n'
         '    {"name": "Нефролог", "percent": 25, "reason": "Причина"}\n'
         '  ],\n'
         '  "urgency": "medium",\n'
-        '  "urgency_reason": "Пояснение"\n'
+        '  "urgency_reason": "Пояснение для пациента",\n'
+        '  "needs_fresh_metrics": []\n'
         '}\n\n'
         "Правила:\n"
         "- Максимум 3 специалиста\n"
         "- Проценты в сумме = 100\n"
         "- НЕ рекомендуй Терапевта\n"
+        "- needs_fresh_metrics: список из heartrate/blood_pressure/spo2 если нужны свежие данные\n"
         "- Думай как врач — жажда+мочеиспускание+слабость+похудение = диабет = Эндокринолог"
     )
 
     try:
-        raw = ai_service._call_ai(system_prompt, "Определи специалистов.", temperature=0.1, max_tokens=600)
+        raw = ai_service._call_ai(system_prompt, "Определи специалистов.", temperature=0.1, max_tokens=700)
         cleaned = ai_service._extract_json_block(raw)
         from utils.json_parser import safe_parse_json_object
         parsed = safe_parse_json_object(cleaned, default={})
@@ -337,10 +502,46 @@ def get_final_recommendation(all_data: dict, user_profile: dict, patient_history
         if urgency not in ("emergency", "high", "medium", "low"):
             urgency = "medium"
 
+        urgency_reason = parsed.get("urgency_reason", "Рекомендуется обратиться к врачу.")
+
+        # Формируем читаемый текст рекомендации
+        top = specialists[0] if specialists else None
+        recommendation_text = urgency_reason
+        if top:
+            recommendation_text = (
+                f"{urgency_reason}\n\n"
+                f"Рекомендуемый специалист: {top['name']}. {top.get('reason', '')}"
+            ).strip()
+
+        # needs_fresh_metrics от AI
+        needs_fresh = parsed.get("needs_fresh_metrics", [])
+        if not isinstance(needs_fresh, list):
+            needs_fresh = []
+        # Оставляем только допустимые значения
+        allowed = {"heartrate", "blood_pressure", "spo2"}
+        needs_fresh = [m for m in needs_fresh if m in allowed]
+
+        # Сообщение для пользователя если AI запросил свежие метрики
+        needs_fresh_message = ""
+        if needs_fresh:
+            metric_names = {
+                "heartrate": "Пульс",
+                "blood_pressure": "Давление",
+                "spo2": "SpO2",
+            }
+            names = ", ".join(metric_names.get(m, m) for m in needs_fresh)
+            needs_fresh_message = (
+                f"💡 Для более точного анализа рекомендуем измерить: {names}. "
+                "Откройте раздел Здоровье в приложении и нажмите «Отправить показатели сейчас»."
+            )
+
         return {
             "specialists": specialists,
             "urgency": urgency,
-            "urgency_reason": parsed.get("urgency_reason", "Рекомендуется обратиться к врачу."),
+            "urgency_reason": urgency_reason,
+            "recommendation": recommendation_text,
+            "needs_fresh_metrics": needs_fresh,
+            "needs_fresh_metrics_message": needs_fresh_message,
         }
 
     except Exception as e:
@@ -351,4 +552,7 @@ def get_final_recommendation(all_data: dict, user_profile: dict, patient_history
             ],
             "urgency": "medium",
             "urgency_reason": "Рекомендуется обратиться к врачу.",
+            "recommendation": "Рекомендуется обратиться к врачу.",
+            "needs_fresh_metrics": [],
+            "needs_fresh_metrics_message": "",
         }

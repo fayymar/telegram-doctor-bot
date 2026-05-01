@@ -18,6 +18,7 @@ from services.consultation_agent import (
     get_anamnesis_questions,
     get_final_recommendation,
     get_patient_history,
+    get_recent_health_metrics,
 )
 from database.connection import supabase_client
 
@@ -130,9 +131,14 @@ async def api_consultation_start(request: web.Request) -> web.Response:
     # История консультаций
     patient_history = get_patient_history(user_id, supabase_client)
 
-    # Шаг 1: Красные флаги
-    red_flag_result = check_red_flags(symptoms)
+    # Свежие метрики здоровья
+    health_metrics = get_recent_health_metrics(user_id, supabase_client, hours=24)
+    logger.info(f"Health metrics for user_id={user_id}: has_data={health_metrics.get('has_any_data')}")
+
+    # Шаг 1: Красные флаги (с учётом метрик)
+    red_flag_result = check_red_flags(symptoms, health_metrics=health_metrics)
     red_flag = red_flag_result.get("red_flag", False)
+    needs_fresh_metrics = red_flag_result.get("needs_fresh_metrics", [])
 
     # Шаг 2: Генерация уточняющих вопросов
     questions = parse_and_generate_questions(symptoms, user_profile, patient_history)
@@ -147,12 +153,14 @@ async def api_consultation_start(request: web.Request) -> web.Response:
         "duration": None,
         "anamnesis_questions": [],
         "anamnesis_answers": [],
+        "health_metrics": health_metrics,
     }
 
     return json_response({
         "session_id": session_id,
         "questions": questions,
         "red_flag": red_flag,
+        "needs_fresh_metrics": needs_fresh_metrics,
     })
 
 
@@ -185,9 +193,9 @@ async def api_consultation_answer(request: web.Request) -> web.Response:
 
     next_index = question_index + 1
     if next_index < len(questions):
-        return json_response({"next_question": questions[next_index], "ready_for_result": False})
+        return json_response({"next_question": questions[next_index], "ready_for_result": False, "needs_fresh_metrics": []})
     else:
-        return json_response({"next_question": None, "ready_for_result": True})
+        return json_response({"next_question": None, "ready_for_result": True, "needs_fresh_metrics": []})
 
 
 async def api_consultation_duration(request: web.Request) -> web.Response:
@@ -213,7 +221,7 @@ async def api_consultation_duration(request: web.Request) -> web.Response:
     anamnesis_questions = get_anamnesis_questions(session["symptoms"])
     session["anamnesis_questions"] = anamnesis_questions
 
-    return json_response({"anamnesis_questions": anamnesis_questions})
+    return json_response({"anamnesis_questions": anamnesis_questions, "needs_fresh_metrics": []})
 
 
 async def api_consultation_result(request: web.Request) -> web.Response:
@@ -242,7 +250,11 @@ async def api_consultation_result(request: web.Request) -> web.Response:
         "anamnesis_answers": anamnesis_answers,
     }
 
-    recommendation = get_final_recommendation(all_data, session["user_profile"])
+    recommendation = get_final_recommendation(
+        all_data,
+        session["user_profile"],
+        health_metrics=session.get("health_metrics"),
+    )
 
     # Сохраняем в Supabase
     try:
