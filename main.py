@@ -55,7 +55,7 @@ dp.include_router(consultation.router) # Консультации (должен 
 
 
 # Хранилище сессий в памяти (для MVP)
-sessions: dict = {}
+consultation_sessions: dict = {}
 
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
@@ -144,7 +144,7 @@ async def api_consultation_start(request: web.Request) -> web.Response:
     questions = parse_and_generate_questions(symptoms, user_profile, patient_history)
 
     session_id = str(uuid.uuid4())
-    sessions[session_id] = {
+    consultation_sessions[session_id] = {
         "user_id": user_id,
         "symptoms": symptoms,
         "user_profile": user_profile,
@@ -171,31 +171,31 @@ async def api_consultation_answer(request: web.Request) -> web.Response:
     except Exception:
         return json_response({"error": "Invalid JSON"}, status=400)
 
+    logger.info(f"Consultation answer: {body}")
+
     session_id = body.get("session_id")
-    question_index = body.get("question_index")
-    answer = body.get("answer", "")
+    if not session_id:
+        return json_response({"error": "session_id is required"}, status=400)
 
-    if not session_id or question_index is None:
-        return json_response({"error": "session_id and question_index are required"}, status=400)
-
-    session = sessions.get(session_id)
+    session = consultation_sessions.get(session_id)
     if not session:
         return json_response({"error": "Session not found"}, status=404)
 
-    questions = session["questions"]
+    try:
+        answers = body.get("answers", [])
+        questions = session["questions"]
 
-    # Сохраняем ответ
-    q_text = questions[question_index]["question"] if question_index < len(questions) else ""
-    # Обновляем или добавляем запись по индексу
-    while len(session["answers"]) <= question_index:
-        session["answers"].append(None)
-    session["answers"][question_index] = {"question": q_text, "answer": answer}
+        # Сохраняем каждый ответ, сопоставляя с вопросом по индексу
+        paired = []
+        for i, ans in enumerate(answers):
+            q_text = questions[i]["question"] if i < len(questions) else ""
+            paired.append({"question": q_text, "answer": str(ans)})
+        session["answers"] = paired
 
-    next_index = question_index + 1
-    if next_index < len(questions):
-        return json_response({"next_question": questions[next_index], "ready_for_result": False, "needs_fresh_metrics": []})
-    else:
-        return json_response({"next_question": None, "ready_for_result": True, "needs_fresh_metrics": []})
+        return json_response({"next_step": "duration"})
+    except Exception as e:
+        logger.error(f"Consultation answer error: {e}", exc_info=True)
+        return json_response({"error": str(e)}, status=500)
 
 
 async def api_consultation_duration(request: web.Request) -> web.Response:
@@ -205,23 +205,35 @@ async def api_consultation_duration(request: web.Request) -> web.Response:
     except Exception:
         return json_response({"error": "Invalid JSON"}, status=400)
 
+    logger.info(f"Consultation duration: {body}")
+
     session_id = body.get("session_id")
     duration = body.get("duration", "")
 
     if not session_id:
         return json_response({"error": "session_id is required"}, status=400)
 
-    session = sessions.get(session_id)
+    session = consultation_sessions.get(session_id)
     if not session:
         return json_response({"error": "Session not found"}, status=404)
 
-    session["duration"] = duration
+    try:
+        session["duration"] = duration
 
-    # Генерация анамнестических вопросов
-    anamnesis_questions = get_anamnesis_questions(session["symptoms"])
-    session["anamnesis_questions"] = anamnesis_questions
+        # Генерация анамнестических вопросов
+        anamnesis_questions = get_anamnesis_questions(session["symptoms"])
+        session["anamnesis_questions"] = anamnesis_questions
 
-    return json_response({"anamnesis_questions": anamnesis_questions, "needs_fresh_metrics": []})
+        # Нормализуем ключ: question → text для Mini App
+        normalized = [
+            {"text": q.get("question", q.get("text", "")), "options": q.get("options", [])}
+            for q in anamnesis_questions
+        ]
+
+        return json_response({"anamnesis_questions": normalized, "needs_fresh_metrics": []})
+    except Exception as e:
+        logger.error(f"Consultation duration error: {e}", exc_info=True)
+        return json_response({"error": str(e)}, status=500)
 
 
 async def api_consultation_result(request: web.Request) -> web.Response:
@@ -231,46 +243,88 @@ async def api_consultation_result(request: web.Request) -> web.Response:
     except Exception:
         return json_response({"error": "Invalid JSON"}, status=400)
 
+    logger.info(f"Consultation result: {body}")
+
     session_id = body.get("session_id")
     if not session_id:
         return json_response({"error": "session_id is required"}, status=400)
 
-    session = sessions.get(session_id)
+    session = consultation_sessions.get(session_id)
     if not session:
         return json_response({"error": "Session not found"}, status=404)
 
-    # Анамнестические ответы могут быть переданы в теле запроса
-    anamnesis_answers = body.get("anamnesis_answers", session.get("anamnesis_answers", []))
-    session["anamnesis_answers"] = anamnesis_answers
-
-    all_data = {
-        "symptoms": session["symptoms"],
-        "followup_answers": [a for a in session["answers"] if a],
-        "duration": session["duration"] or "не указана",
-        "anamnesis_answers": anamnesis_answers,
-    }
-
-    recommendation = get_final_recommendation(
-        all_data,
-        session["user_profile"],
-        health_metrics=session.get("health_metrics"),
-    )
-
-    # Сохраняем в Supabase
     try:
-        specialists = recommendation.get("specialists", [])
-        recommended_doctor = specialists[0]["name"] if specialists else "Терапевт"
-        supabase_client.table("consultations").insert({
-            "user_id": session["user_id"],
-            "symptoms": json.dumps({"text": session["symptoms"], "history": [a for a in session["answers"] if a]}, ensure_ascii=False),
-            "questions_answers": json.dumps(all_data, ensure_ascii=False),
-            "recommended_doctor": recommended_doctor,
-            "urgency_level": recommendation.get("urgency", "medium"),
-        }).execute()
-    except Exception as e:
-        logger.error(f"Failed to save consultation to Supabase: {e}", exc_info=True)
+        # Анамнестические ответы могут быть переданы в теле запроса (плоский список строк или список dict)
+        raw_anamnesis = body.get("anamnesis_answers", session.get("anamnesis_answers", []))
+        # Нормализуем: если пришли строки — сопоставляем с вопросами из сессии
+        if raw_anamnesis and isinstance(raw_anamnesis[0], str):
+            qs = session.get("anamnesis_questions", [])
+            anamnesis_answers = [
+                {"question": (qs[i].get("text") or qs[i].get("question", "")) if i < len(qs) else "",
+                 "answer": str(ans)}
+                for i, ans in enumerate(raw_anamnesis)
+            ]
+        else:
+            anamnesis_answers = raw_anamnesis
+        session["anamnesis_answers"] = anamnesis_answers
 
-    return json_response(recommendation)
+        all_data = {
+            "symptoms": session["symptoms"],
+            "followup_answers": [a for a in session["answers"] if a],
+            "duration": session["duration"] or "не указана",
+            "anamnesis_answers": anamnesis_answers,
+        }
+
+        # user_profile может отсутствовать в упрощённых сессиях — подгружаем при необходимости
+        user_profile = session.get("user_profile") or {}
+        if not user_profile:
+            try:
+                resp = supabase_client.table("user_profiles").select("*").eq("user_id", session["user_id"]).single().execute()
+                user_profile = resp.data or {}
+            except Exception:
+                pass
+
+        recommendation = get_final_recommendation(
+            all_data,
+            user_profile,
+            health_metrics=session.get("health_metrics"),
+        )
+
+        # Сохраняем в Supabase
+        try:
+            specialists_raw = recommendation.get("specialists", [])
+            recommended_doctor = specialists_raw[0]["name"] if specialists_raw else "Терапевт"
+            supabase_client.table("consultations").insert({
+                "user_id": session["user_id"],
+                "symptoms": json.dumps({"text": session["symptoms"], "history": [a for a in session["answers"] if a]}, ensure_ascii=False),
+                "questions_answers": json.dumps(all_data, ensure_ascii=False),
+                "recommended_doctor": recommended_doctor,
+                "urgency_level": recommendation.get("urgency", "medium"),
+            }).execute()
+        except Exception as e:
+            logger.error(f"Failed to save consultation to Supabase: {e}", exc_info=True)
+
+        # Нормализуем specialists: match_percent → percentage для Mini App
+        specialists_out = [
+            {
+                "name": s.get("name", ""),
+                "percentage": s.get("match_percent", s.get("percentage", 0)),
+                "reason": s.get("reason", ""),
+            }
+            for s in specialists_raw
+        ]
+
+        return json_response({
+            "recommendation": recommendation.get("recommendation", recommendation.get("urgency_reason", "")),
+            "specialists": specialists_out,
+            "urgency": recommendation.get("urgency", "medium"),
+            "needs_fresh_metrics": recommendation.get("needs_fresh_metrics", []),
+            "needs_fresh_metrics_message": recommendation.get("needs_fresh_metrics_message", ""),
+        })
+
+    except Exception as e:
+        logger.error(f"Consultation result error: {e}", exc_info=True)
+        return json_response({"error": str(e)}, status=500)
 
 
 async def api_profile_get(request: web.Request) -> web.Response:
