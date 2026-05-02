@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -375,6 +375,8 @@ async def api_health_heartrate(request: web.Request) -> web.Response:
 def _interpret_heartrate(hr: float) -> str:
     if hr < 50 or hr > 120:
         return f"❤️ Пульс: {hr:.0f} уд/мин 🚨 Критично"
+    if hr < 60:
+        return f"❤️ Пульс: {hr:.0f} уд/мин ⚠️ Ниже нормы"
     if hr > 100:
         return f"❤️ Пульс: {hr:.0f} уд/мин ⚠️ Повышен"
     return f"❤️ Пульс: {hr:.0f} уд/мин ✅ В норме"
@@ -384,7 +386,7 @@ def _interpret_blood_pressure(systolic: float, diastolic: float) -> str:
     if systolic >= 140 or diastolic >= 90:
         label = "🚨 Высокое"
     elif systolic >= 130 or diastolic >= 85:
-        label = "⚠️ Повышенное"
+        label = "⚠️ Слегка повышенное"
     elif systolic < 90 or diastolic < 60:
         label = "⚠️ Пониженное"
     else:
@@ -393,13 +395,94 @@ def _interpret_blood_pressure(systolic: float, diastolic: float) -> str:
 
 
 def _interpret_spo2(spo2: float) -> str:
+    if spo2 < 90:
+        return f"🫁 SpO2: {spo2:.0f}% 🚨 Критично низкая насыщенность"
     if spo2 < 95:
-        return f"🫁 SpO2: {spo2:.0f}% ⚠️ Низкая насыщенность — обратите внимание"
+        return f"🫁 SpO2: {spo2:.0f}% ⚠️ Понижена"
     return f"🫁 SpO2: {spo2:.0f}% ✅ Норма"
 
 
+def _interpret_steps(steps: int) -> str:
+    if steps >= 10000:
+        return f"👣 Шаги: {steps} за день 🏃 Высокая активность"
+    if steps >= 5000:
+        return f"👣 Шаги: {steps} за день 👍 Средняя активность"
+    return f"👣 Шаги: {steps} за день 🛋️ Низкая активность"
+
+
+def _has_deviation(received: dict) -> bool:
+    """Проверяет наличие отклонений от нормы."""
+    hr = received.get('heartrate')
+    if hr is not None and (hr < 60 or hr > 100):
+        return True
+    s = received.get('systolic')
+    d = received.get('diastolic')
+    if s is not None and d is not None and (s >= 140 or d >= 90 or s < 90 or d < 60):
+        return True
+    spo2 = received.get('spo2')
+    if spo2 is not None and spo2 < 95:
+        return True
+    return False
+
+
+def _build_alert_msg(received: dict) -> str:
+    """Формирует сообщение об отклонениях для Telegram."""
+    lines = ["⚠️ Обнаружены отклонения в показателях:\n"]
+    recommendations = []
+
+    if 'heartrate' in received:
+        hr = received['heartrate']
+        lines.append(_interpret_heartrate(hr))
+        if hr < 50 or hr > 120:
+            recommendations.append("Критически аномальный пульс — немедленно обратитесь за медицинской помощью.")
+        elif hr < 60 or hr > 100:
+            recommendations.append("Нестандартный пульс — отдохните и повторите измерение через 15 минут.")
+
+    if 'systolic' in received and 'diastolic' in received:
+        s, d = received['systolic'], received['diastolic']
+        lines.append(_interpret_blood_pressure(s, d))
+        if s >= 140 or d >= 90:
+            recommendations.append(
+                "При повышенном давлении рекомендуем отдохнуть, избегать физических нагрузок "
+                "и измерить давление повторно через 15-30 минут. "
+                "Если давление стабильно выше 140/90 — обратитесь к врачу."
+            )
+        elif s < 90 or d < 60:
+            recommendations.append(
+                "При пониженном давлении выпейте воды, лягте и поднимите ноги. "
+                "Если состояние не улучшается — обратитесь к врачу."
+            )
+
+    if 'spo2' in received:
+        spo2 = received['spo2']
+        lines.append(_interpret_spo2(spo2))
+        if spo2 < 90:
+            recommendations.append("Критически низкое насыщение крови кислородом — немедленно обратитесь за медицинской помощью.")
+        elif spo2 < 95:
+            recommendations.append("Пониженное насыщение крови кислородом — обеспечьте приток свежего воздуха и отдохните.")
+
+    if 'steps' in received:
+        lines.append(_interpret_steps(int(received['steps'])))
+
+    if recommendations:
+        lines.append(f"\n💡 Рекомендация: {' '.join(recommendations)}")
+
+    return "\n".join(lines)
+
+
+async def send_delayed_alert(user_id, received: dict, delay: int = 120):
+    """Отправляет уведомление об отклонениях через delay секунд."""
+    await asyncio.sleep(delay)
+    msg = _build_alert_msg(received)
+    try:
+        await bot.send_message(user_id, msg)
+        logger.info(f"Delayed alert sent to user_id={user_id}")
+    except Exception as e:
+        logger.error(f"Delayed alert send error for user_id={user_id}: {e}")
+
+
 async def api_health_metrics_post(request: web.Request) -> web.Response:
-    """POST /api/health/metrics — универсальный приём показателей здоровья"""
+    """POST /api/health/metrics — тихое сохранение + отложенный алерт при отклонениях"""
     try:
         data = await request.json()
         logger.info(f"Received health metrics POST: {data}")
@@ -442,51 +525,105 @@ async def api_health_metrics_post(request: web.Request) -> web.Response:
     if not records_to_insert:
         return json_response({'error': 'No valid metrics provided'}, status=400)
 
+    # Тихое сохранение в Supabase
     try:
         supabase_client.table('health_metrics').insert(records_to_insert).execute()
     except Exception as e:
         logger.error(f"Health metrics insert error: {e}", exc_info=True)
         return json_response({'error': str(e)}, status=500)
 
-    # Уведомление в Telegram
-    if user_id:
-        lines = ["📊 Получены показатели здоровья:\n"]
-        all_ok = True
+    logger.info(f"Silent save for user {user_id}: {received}")
 
-        if 'heartrate' in received:
-            line = _interpret_heartrate(received['heartrate'])
-            lines.append(line)
-            if '🚨' in line or '⚠️' in line:
-                all_ok = False
+    # Проверка отклонений — если есть, запускаем отложенный алерт через 2 минуты
+    if user_id and _has_deviation(received):
+        asyncio.create_task(send_delayed_alert(user_id, received, delay=120))
+        logger.info(f"Deviation detected for user_id={user_id}, alert scheduled in 120s")
 
-        if 'systolic' in received and 'diastolic' in received:
-            line = _interpret_blood_pressure(received['systolic'], received['diastolic'])
-            lines.append(line)
-            if '🚨' in line or '⚠️' in line:
-                all_ok = False
-        elif 'systolic' in received:
-            lines.append(f"🩺 Систолическое: {received['systolic']:.0f} мм рт.ст.")
-        elif 'diastolic' in received:
-            lines.append(f"🩺 Диастолическое: {received['diastolic']:.0f} мм рт.ст.")
+    return json_response({'status': 'ok', 'saved': len(records_to_insert)})
 
-        if 'spo2' in received:
-            line = _interpret_spo2(received['spo2'])
-            lines.append(line)
-            if '⚠️' in line:
-                all_ok = False
 
-        if 'steps' in received:
-            lines.append(f"👣 Шаги: {int(received['steps'])} за день")
+async def api_health_metrics_report(request: web.Request) -> web.Response:
+    """POST /api/health/metrics/report/{user_id} — ручной отчёт о последних метриках"""
+    user_id = request.match_info.get('user_id')
+    if not user_id:
+        return json_response({'error': 'user_id is required'}, status=400)
 
-        lines.append("\nВсе показатели в норме." if all_ok else "\nЕсть показатели, требующие внимания.")
+    try:
+        cutoff = (datetime.utcnow() - timedelta(hours=1)).isoformat()
+        resp = (
+            supabase_client.table('health_metrics')
+            .select('metric_type, value, recorded_at')
+            .eq('user_id', user_id)
+            .gte('recorded_at', cutoff)
+            .order('recorded_at', desc=True)
+            .execute()
+        )
+        rows = resp.data or []
+    except Exception as e:
+        logger.error(f"Report fetch error for user_id={user_id}: {e}", exc_info=True)
+        return json_response({'error': str(e)}, status=500)
 
-        try:
-            await bot.send_message(user_id, "\n".join(lines))
-        except Exception as e:
-            logger.error(f"Telegram notify error for user_id={user_id}: {e}")
+    # Берём последнюю запись каждого типа
+    seen: dict = {}
+    for row in rows:
+        mt = row['metric_type']
+        if mt not in seen:
+            seen[mt] = row
 
-    saved_count = len(records_to_insert)
-    return json_response({'status': 'ok', 'saved': saved_count})
+    if not seen:
+        return json_response({'status': 'ok', 'message': 'No data in the last hour'})
+
+    # Собираем received-словарь для построения отчёта
+    received: dict = {}
+    if 'heartrate' in seen:
+        received['heartrate'] = seen['heartrate']['value']
+    if 'blood_pressure_systolic' in seen:
+        received['systolic'] = seen['blood_pressure_systolic']['value']
+    if 'blood_pressure_diastolic' in seen:
+        received['diastolic'] = seen['blood_pressure_diastolic']['value']
+    if 'spo2' in seen:
+        received['spo2'] = seen['spo2']['value']
+    if 'steps' in seen:
+        received['steps'] = seen['steps']['value']
+
+    # Формируем полный отчёт
+    lines = ["📊 Ваши показатели здоровья:\n"]
+    all_ok = True
+
+    if 'heartrate' in received:
+        line = _interpret_heartrate(received['heartrate'])
+        lines.append(line)
+        if '🚨' in line or '⚠️' in line:
+            all_ok = False
+
+    if 'systolic' in received and 'diastolic' in received:
+        line = _interpret_blood_pressure(received['systolic'], received['diastolic'])
+        lines.append(line)
+        if '🚨' in line or '⚠️' in line:
+            all_ok = False
+    elif 'systolic' in received:
+        lines.append(f"🩺 Систолическое: {received['systolic']:.0f} мм рт.ст.")
+
+    if 'spo2' in received:
+        line = _interpret_spo2(received['spo2'])
+        lines.append(line)
+        if '🚨' in line or '⚠️' in line:
+            all_ok = False
+
+    if 'steps' in received:
+        lines.append(_interpret_steps(int(received['steps'])))
+
+    lines.append("\nВсе показатели в норме 👌" if all_ok else "\n⚠️ Есть показатели, требующие внимания.")
+
+    msg = "\n".join(lines)
+    try:
+        await bot.send_message(user_id, msg)
+        logger.info(f"Report sent to user_id={user_id}")
+    except Exception as e:
+        logger.error(f"Report send error for user_id={user_id}: {e}", exc_info=True)
+        return json_response({'error': f'Telegram send failed: {e}'}, status=500)
+
+    return json_response({'status': 'ok', 'message': 'Report sent'})
 
 
 async def api_health_metrics_get(request: web.Request) -> web.Response:
@@ -570,6 +707,7 @@ async def start_web_server():
         app.router.add_get('/api/health/heartrate/{user_id}', api_health_heartrate_get)
         app.router.add_post('/api/health/heartrate', api_health_heartrate)
         app.router.add_post('/api/health/metrics', api_health_metrics_post)
+        app.router.add_post('/api/health/metrics/report/{user_id}', api_health_metrics_report)
         app.router.add_get('/api/health/metrics/{user_id}', api_health_metrics_get)
 
         runner = web.AppRunner(app)
