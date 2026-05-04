@@ -327,19 +327,61 @@ async def api_consultation_result(request: web.Request) -> web.Response:
         return json_response({"error": str(e)}, status=500)
 
 
+_PROFILE_FIELDS = ["first_name", "last_name", "phone", "date_of_birth", "sex", "height", "weight"]
+
+
 async def api_profile_get(request: web.Request) -> web.Response:
-    """GET /api/profile/{user_id}"""
+    """GET /api/profile/{user_id} — читает из таблицы users по telegram_id"""
     user_id = request.match_info.get("user_id")
     if not user_id:
         return json_response({"error": "user_id is required"}, status=400)
 
     try:
-        resp = supabase_client.table("user_profiles").select("*").eq("user_id", int(user_id)).single().execute()
-        profile_data = resp.data or {}
-        return json_response(profile_data)
+        resp = (
+            supabase_client.table("users")
+            .select(", ".join(_PROFILE_FIELDS))
+            .eq("telegram_id", int(user_id))
+            .limit(1)
+            .execute()
+        )
+        rows = resp.data or []
+        if not rows:
+            return json_response({"exists": False, "profile": None})
+
+        row = rows[0]
+        profile = {f: row.get(f) for f in _PROFILE_FIELDS}
+        return json_response({"exists": True, "profile": profile})
     except Exception as e:
-        logger.error(f"Failed to fetch profile for user {user_id}: {e}", exc_info=True)
-        return json_response({"error": "Profile not found"}, status=404)
+        logger.error(f"Profile GET error for user {user_id}: {e}", exc_info=True)
+        return json_response({"error": str(e)}, status=500)
+
+
+async def api_profile_post(request: web.Request) -> web.Response:
+    """POST /api/profile/{user_id} — upsert в таблицу users по telegram_id"""
+    user_id = request.match_info.get("user_id")
+    if not user_id:
+        return json_response({"error": "user_id is required"}, status=400)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({"error": "Invalid JSON"}, status=400)
+
+    logger.info(f"Profile POST user_id={user_id}: {body}")
+
+    # Берём только допустимые поля профиля
+    update_data = {k: v for k, v in body.items() if k in _PROFILE_FIELDS}
+    if not update_data:
+        return json_response({"error": "No valid profile fields provided"}, status=400)
+
+    update_data["telegram_id"] = int(user_id)
+
+    try:
+        supabase_client.table("users").upsert(update_data, on_conflict="telegram_id").execute()
+        return json_response({"status": "ok"})
+    except Exception as e:
+        logger.error(f"Profile POST error for user {user_id}: {e}", exc_info=True)
+        return json_response({"error": str(e)}, status=500)
 
 
 def _fetch_heartrate_records(user_id: str) -> list:
@@ -545,6 +587,26 @@ async def api_health_metrics_post(request: web.Request) -> web.Response:
 
     user_id = data.get('user_id')
     timestamp = data.get('timestamp') or datetime.utcnow().isoformat()
+
+    # Если передан часовой пояс (формат "+05:00") — конвертируем timestamp в UTC
+    tz_str = data.get('timezone')
+    if tz_str and timestamp:
+        try:
+            import re as _re
+            from datetime import timezone as _tz
+            m = _re.match(r'([+-])(\d{2}):(\d{2})', str(tz_str))
+            if m:
+                sign = 1 if m.group(1) == '+' else -1
+                offset = timedelta(hours=int(m.group(2)), minutes=int(m.group(3))) * sign
+                # Убираем возможный суффикс Z или существующий offset перед парсингом
+                ts_clean = timestamp.rstrip('Z').split('+')[0]
+                if ts_clean.count('-') > 2:          # "2026-05-04T10:00:00-05:00"
+                    ts_clean = ts_clean.rsplit('-', 1)[0]
+                dt_local = datetime.fromisoformat(ts_clean).replace(tzinfo=_tz(offset))
+                timestamp = dt_local.astimezone(_tz.utc).strftime('%Y-%m-%dT%H:%M:%S')
+                logger.info(f"Timezone {tz_str} applied, recorded_at={timestamp}")
+        except Exception as tz_err:
+            logger.warning(f"Timezone conversion failed (tz={tz_str}): {tz_err}")
 
     METRIC_MAP = [
         ('heartrate',  'heartrate',              'bpm'),
@@ -758,6 +820,7 @@ async def start_web_server():
         app.router.add_post('/api/consultation/duration', api_consultation_duration)
         app.router.add_post('/api/consultation/result', api_consultation_result)
         app.router.add_get('/api/profile/{user_id}', api_profile_get)
+        app.router.add_post('/api/profile/{user_id}', api_profile_post)
         app.router.add_get('/api/health/heartrate/{user_id}', api_health_heartrate_get)
         app.router.add_post('/api/health/heartrate', api_health_heartrate)
         app.router.add_post('/api/health/metrics', api_health_metrics_post)
