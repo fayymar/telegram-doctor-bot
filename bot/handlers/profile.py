@@ -534,29 +534,6 @@ async def process_weight(message: Message, state: FSMContext):
 
         result = _upsert_profile_with_fallback(profile_data)
 
-        # Также синхронизируем в таблицу users (используется Mini App)
-        try:
-            full_name_parts = (data["full_name"] or "").split(maxsplit=1)
-            first_name = full_name_parts[0] if full_name_parts else None
-            last_name = full_name_parts[1] if len(full_name_parts) > 1 else None
-
-            users_data = {
-                "telegram_id": message.from_user.id,
-                "first_name": first_name,
-                "last_name": last_name,
-                "phone": data.get("phone"),
-                "date_of_birth": data.get("birthdate"),
-                "sex": data.get("gender"),
-                "height": data.get("height"),
-                "weight": data.get("weight"),
-            }
-            supabase_client.table("users").upsert(
-                users_data, on_conflict="telegram_id"
-            ).execute()
-            logger.info("users table synced | telegram_id=%s", message.from_user.id)
-        except Exception as sync_err:
-            logger.warning("Failed to sync users table: %s", sync_err)
-
         logger.info(
             "Профиль сохранён успешно | user_id=%s | result=%s",
             message.from_user.id,

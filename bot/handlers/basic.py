@@ -28,8 +28,8 @@ async def cmd_start(message: Message, state: FSMContext):
 
     # Проверяем, зарегистрирован ли пользователь
     try:
-        response = supabase_client.table('users').select('telegram_id, first_name').eq('telegram_id', user_id).limit(1).execute()
-        logger.info(f"Start check for telegram_id={user_id}, result={response.data}")
+        response = supabase_client.table('user_profiles').select('user_id').eq('user_id', user_id).limit(1).execute()
+        logger.info(f"Start check for user_id={user_id}, result={response.data}")
 
         if response.data:
             # Пользователь уже зарегистрирован
@@ -115,9 +115,9 @@ async def cmd_profile(message: Message):
     """Обработчик команды /profile"""
     user_id = message.from_user.id
     try:
-        resp = supabase_client.table("users").select(
-            "first_name, last_name, phone, date_of_birth, sex, height, weight"
-        ).eq("telegram_id", user_id).limit(1).execute()
+        resp = supabase_client.table("user_profiles").select(
+            "full_name, phone, birthdate, gender, height, weight"
+        ).eq("user_id", user_id).limit(1).execute()
 
         rows = resp.data or []
         if not rows:
@@ -130,7 +130,7 @@ async def cmd_profile(message: Message):
         p = rows[0]
 
         # Форматирование даты рождения
-        dob_raw = p.get("date_of_birth")
+        dob_raw = p.get("birthdate")
         dob = "не указано"
         if dob_raw:
             try:
@@ -141,10 +141,9 @@ async def cmd_profile(message: Message):
 
         # Форматирование пола
         sex_map = {"male": "Мужской", "female": "Женский"}
-        sex = sex_map.get(p.get("sex") or "", "не указано")
+        sex = sex_map.get(p.get("gender") or "", "не указано")
 
-        name_parts = [p.get("first_name") or "", p.get("last_name") or ""]
-        name = " ".join(x for x in name_parts if x) or "не указано"
+        name = p.get("full_name") or "не указано"
 
         lines = [
             "👤 Ваш профиль:\n",
