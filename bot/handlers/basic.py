@@ -116,6 +116,59 @@ async def help_button(message: Message):
     await cmd_help(message)
 
 
+@router.message(Command("profile"))
+async def cmd_profile(message: Message):
+    """Обработчик команды /profile"""
+    user_id = message.from_user.id
+    try:
+        resp = supabase_client.table("users").select(
+            "first_name, last_name, phone, date_of_birth, sex, height, weight"
+        ).eq("telegram_id", user_id).limit(1).execute()
+
+        rows = resp.data or []
+        if not rows:
+            await message.answer(
+                "Профиль не заполнен. Отправьте /start чтобы пройти регистрацию, "
+                "или откройте приложение СимптоМед."
+            )
+            return
+
+        p = rows[0]
+
+        # Форматирование даты рождения
+        dob_raw = p.get("date_of_birth")
+        dob = "не указано"
+        if dob_raw:
+            try:
+                from datetime import date as _date
+                dob = _date.fromisoformat(dob_raw[:10]).strftime("%d.%m.%Y")
+            except Exception:
+                dob = dob_raw
+
+        # Форматирование пола
+        sex_map = {"male": "Мужской", "female": "Женский"}
+        sex = sex_map.get(p.get("sex") or "", "не указано")
+
+        name_parts = [p.get("first_name") or "", p.get("last_name") or ""]
+        name = " ".join(x for x in name_parts if x) or "не указано"
+
+        lines = [
+            "👤 Ваш профиль:\n",
+            f"Имя: {name}",
+            f"Дата рождения: {dob}",
+            f"Пол: {sex}",
+            f"Рост: {p.get('height') or 'не указано'} см",
+            f"Вес: {p.get('weight') or 'не указано'} кг",
+            f"Телефон: {p.get('phone') or 'не указано'}",
+            "\nВы можете изменить данные в приложении СимптоМед (кнопка внизу экрана).",
+        ]
+        await message.answer("\n".join(lines))
+
+    except Exception as e:
+        logger.error(f"Profile command error for user {user_id}: {e}", exc_info=True)
+        await message.answer("❌ Ошибка при загрузке профиля. Попробуйте позже.")
+
+
 @router.message(Command("heartrate"))
 async def cmd_heartrate(message: Message):
     """Обработчик команды /heartrate"""

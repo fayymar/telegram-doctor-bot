@@ -508,17 +508,23 @@ def _interpret_steps(steps: int) -> str:
 
 def _has_deviation(received: dict) -> bool:
     """Проверяет наличие отклонений от нормы."""
+    return bool(_get_abnormal_metrics(received))
+
+
+def _get_abnormal_metrics(received: dict) -> list:
+    """Возвращает список ключей метрик с отклонениями: 'heartrate', 'blood_pressure', 'spo2'."""
+    abnormal = []
     hr = received.get('heartrate')
     if hr is not None and (hr < 60 or hr > 100):
-        return True
+        abnormal.append('heartrate')
     s = received.get('systolic')
     d = received.get('diastolic')
     if s is not None and d is not None and (s >= 140 or d >= 90 or s < 90 or d < 60):
-        return True
+        abnormal.append('blood_pressure')
     spo2 = received.get('spo2')
     if spo2 is not None and spo2 < 95:
-        return True
-    return False
+        abnormal.append('spo2')
+    return abnormal
 
 
 def _build_alert_msg(received: dict) -> str:
@@ -575,6 +581,32 @@ async def send_delayed_alert(user_id, received: dict, delay: int = 120):
         logger.info(f"Delayed alert sent to user_id={user_id}")
     except Exception as e:
         logger.error(f"Delayed alert send error for user_id={user_id}: {e}")
+
+
+async def send_remeasure_reminder(user_id, abnormal_metrics: list, delay: int = 14400):
+    """Напоминание о повторном измерении через delay секунд (по умолчанию 4 часа)."""
+    await asyncio.sleep(delay)
+
+    metric_names = {
+        'blood_pressure': 'давление',
+        'heartrate': 'пульс',
+        'spo2': 'SpO2',
+    }
+    metrics_text = [metric_names.get(m, m) for m in abnormal_metrics]
+    metrics_list = ', '.join(metrics_text)
+
+    message = (
+        f"🔔 Напоминание о повторном измерении\n\n"
+        f"Ранее были обнаружены отклонения: {metrics_list}.\n"
+        f"Рекомендуем измерить повторно чтобы убедиться что показатели пришли в норму.\n\n"
+        f"Откройте приложение СимптоМед → Здоровье → «Отправить показатели сейчас»"
+    )
+
+    try:
+        await bot.send_message(chat_id=user_id, text=message)
+        logger.info(f"Remeasure reminder sent to user {user_id}")
+    except Exception as e:
+        logger.error(f"Failed to send reminder to {user_id}: {e}")
 
 
 async def api_health_metrics_post(request: web.Request) -> web.Response:
@@ -652,8 +684,10 @@ async def api_health_metrics_post(request: web.Request) -> web.Response:
 
     # Проверка отклонений — если есть, запускаем отложенный алерт через 2 минуты
     if user_id and _has_deviation(received):
+        abnormal = _get_abnormal_metrics(received)
         asyncio.create_task(send_delayed_alert(user_id, received, delay=120))
-        logger.info(f"Deviation detected for user_id={user_id}, alert scheduled in 120s")
+        asyncio.create_task(send_remeasure_reminder(user_id, abnormal, delay=14400))
+        logger.info(f"Deviation detected for user_id={user_id}, alert in 120s, reminder in 4h, metrics={abnormal}")
 
     return json_response({'status': 'ok', 'saved': len(records_to_insert)})
 
