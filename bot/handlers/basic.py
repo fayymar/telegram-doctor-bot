@@ -28,19 +28,13 @@ async def cmd_start(message: Message, state: FSMContext):
 
     # Проверяем, зарегистрирован ли пользователь
     try:
-        response = supabase_client.table('user_profiles').select('*').eq('user_id', user_id).execute()
+        response = supabase_client.table('users').select('telegram_id, first_name').eq('telegram_id', user_id).limit(1).execute()
+        logger.info(f"Start check for telegram_id={user_id}, result={response.data}")
 
         if response.data:
             # Пользователь уже зарегистрирован
-            lang = response.data[0].get('language', 'ru')
-
-            welcome_text = {
-                'ru': "👋 С возвращением!\n\nВыберите действие:",
-                'uz': "👋 Qaytganingiz bilan!\n\nAmalni tanlang:"
-            }
-
             await message.answer(
-                welcome_text.get(lang, welcome_text['ru']),
+                "👋 С возвращением!\n\nВыберите действие:",
                 reply_markup=get_main_menu()
             )
         else:

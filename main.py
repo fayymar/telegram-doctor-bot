@@ -345,6 +345,7 @@ async def api_profile_get(request: web.Request) -> web.Response:
             .execute()
         )
         rows = resp.data or []
+        logger.info(f"Profile GET for user_id={user_id}, result={rows}")
         if not rows:
             return json_response({"exists": False, "profile": None})
 
