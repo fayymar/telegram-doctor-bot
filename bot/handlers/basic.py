@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, MenuButtonWebApp
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
@@ -10,6 +10,19 @@ from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 router = Router()
+
+WEBAPP_URL = "https://sympto-med-app.vercel.app"
+
+
+async def set_webapp_menu_button(bot, chat_id: int) -> None:
+    """Устанавливает кнопку СимптоМед в меню чата."""
+    await bot.set_chat_menu_button(
+        chat_id=chat_id,
+        menu_button=MenuButtonWebApp(
+            text="СимптоМед",
+            web_app=WebAppInfo(url=WEBAPP_URL),
+        ),
+    )
 
 
 def get_language_keyboard() -> ReplyKeyboardMarkup:
@@ -32,13 +45,18 @@ async def cmd_start(message: Message, state: FSMContext):
         logger.info(f"Start check for user_id={user_id}, result={response.data}")
 
         if response.data:
-            # Пользователь уже зарегистрирован
+            # Пользователь уже зарегистрирован — восстанавливаем Menu Button на случай сброса
+            try:
+                await set_webapp_menu_button(message.bot, message.chat.id)
+                logger.info(f"Menu button restored for user_id={user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to set menu button for user_id={user_id}: {e}")
             await message.answer(
                 "👋 С возвращением!\n\nВыберите действие:",
                 reply_markup=get_main_menu()
             )
         else:
-            # Новый пользователь - выбор языка
+            # Новый пользователь — Menu Button не устанавливаем, только клавиатура регистрации
             await message.answer(
                 "👋 Welcome! / Добро пожаловать! / Xush kelibsiz!\n\n"
                 "🌐 Choose your language / Выберите язык / Tilni tanlang:",

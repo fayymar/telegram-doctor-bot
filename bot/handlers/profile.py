@@ -4,6 +4,7 @@ from aiogram.types import Message, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 
 from bot.states import Registration, EditProfile
+from bot.handlers.basic import set_webapp_menu_button
 from bot.keyboards import (
     get_main_menu,
     get_phone_keyboard,
@@ -563,6 +564,13 @@ async def process_weight(message: Message, state: FSMContext):
             "✅ Профиль сохранён! Вы можете просматривать и редактировать его "
             "в приложении СимптоМед (кнопка внизу экрана)."
         )
+
+        # Устанавливаем Menu Button после завершения регистрации
+        try:
+            await set_webapp_menu_button(message.bot, message.chat.id)
+            logger.info("Menu button set after registration | user_id=%s", message.from_user.id)
+        except Exception as menu_err:
+            logger.warning("Failed to set menu button | user_id=%s: %s", message.from_user.id, menu_err)
 
         await state.clear()
 
