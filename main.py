@@ -7,6 +7,7 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import MenuButtonDefault
 
 from config import BOT_TOKEN
 from bot.handlers import basic, profile, consultation, specialists, history, medications, health_diary, clinic_finder
@@ -823,6 +824,10 @@ async def start_bot():
             # Удаляем старые вебхуки (если есть)
             await bot.delete_webhook(drop_pending_updates=True)
             logger.info("✅ Webhook cleared")
+
+            # Сбрасываем глобальную Menu Button — управление только через set_chat_menu_button per user
+            await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+            logger.info("✅ Global menu button reset to default")
 
             # Запускаем polling
             logger.info("✅ Bot polling started successfully!")

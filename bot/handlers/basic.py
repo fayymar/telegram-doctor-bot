@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, MenuButtonWebApp
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, MenuButtonWebApp, MenuButtonDefault
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
@@ -56,7 +56,15 @@ async def cmd_start(message: Message, state: FSMContext):
                 reply_markup=get_main_menu()
             )
         else:
-            # Новый пользователь — Menu Button не устанавливаем, только клавиатура регистрации
+            # Новый пользователь — сбрасываем Menu Button, показываем только клавиатуру регистрации
+            try:
+                await message.bot.set_chat_menu_button(
+                    chat_id=message.chat.id,
+                    menu_button=MenuButtonDefault(),
+                )
+                logger.info(f"Menu button reset for new user_id={user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to reset menu button for user_id={user_id}: {e}")
             await message.answer(
                 "👋 Welcome! / Добро пожаловать! / Xush kelibsiz!\n\n"
                 "🌐 Choose your language / Выберите язык / Tilni tanlang:",
