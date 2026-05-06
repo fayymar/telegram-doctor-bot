@@ -336,6 +336,8 @@ async def api_profile_get(request: web.Request) -> web.Response:
     if not user_id:
         return json_response({"error": "user_id is required"}, status=400)
 
+    logger.info(f"Profile GET request: user_id={user_id}")
+
     try:
         resp = (
             supabase_client.table("user_profiles")
@@ -345,7 +347,7 @@ async def api_profile_get(request: web.Request) -> web.Response:
             .execute()
         )
         rows = resp.data or []
-        logger.info(f"Profile GET for user_id={user_id}, result={rows}")
+        logger.info(f"Profile GET result: user_id={user_id}, exists={bool(rows)}, data={rows}")
         if not rows:
             return json_response({"exists": False, "profile": None})
 
@@ -368,7 +370,7 @@ async def api_profile_post(request: web.Request) -> web.Response:
     except Exception:
         return json_response({"error": "Invalid JSON"}, status=400)
 
-    logger.info(f"Profile POST user_id={user_id}: {body}")
+    logger.info(f"Profile POST request: user_id={user_id}, body={body}")
 
     # Берём только допустимые поля профиля
     update_data = {k: v for k, v in body.items() if k in _PROFILE_FIELDS}
@@ -376,9 +378,11 @@ async def api_profile_post(request: web.Request) -> web.Response:
         return json_response({"error": "No valid profile fields provided"}, status=400)
 
     update_data["user_id"] = int(user_id)
+    logger.info(f"Profile POST upsert data: {update_data}")
 
     try:
         supabase_client.table("user_profiles").upsert(update_data, on_conflict="user_id").execute()
+        logger.info(f"Profile POST success: user_id={user_id}")
         return json_response({"status": "ok"})
     except Exception as e:
         logger.error(f"Profile POST error for user {user_id}: {e}", exc_info=True)
