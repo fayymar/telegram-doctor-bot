@@ -124,7 +124,7 @@ async def api_consultation_start(request: web.Request) -> web.Response:
 
     # Получаем профиль пользователя из Supabase
     try:
-        resp = supabase_client.table("user_profiles").select("*").eq("user_id", user_id).single().execute()
+        resp = supabase_client.table("users").select("*").eq("telegram_id", user_id).single().execute()
         user_profile = resp.data or {}
     except Exception:
         user_profile = {}
@@ -280,7 +280,7 @@ async def api_consultation_result(request: web.Request) -> web.Response:
         user_profile = session.get("user_profile") or {}
         if not user_profile:
             try:
-                resp = supabase_client.table("user_profiles").select("*").eq("user_id", session["user_id"]).single().execute()
+                resp = supabase_client.table("users").select("*").eq("telegram_id", session["user_id"]).single().execute()
                 user_profile = resp.data or {}
             except Exception:
                 pass
