@@ -124,7 +124,7 @@ async def api_consultation_start(request: web.Request) -> web.Response:
 
     # Получаем профиль пользователя из Supabase
     try:
-        resp = supabase_client.table("users").select("*").eq("telegram_id", user_id).single().execute()
+        resp = supabase_client.table("user_profiles").select("*").eq("user_id", user_id).single().execute()
         user_profile = resp.data or {}
     except Exception:
         user_profile = {}
@@ -280,7 +280,7 @@ async def api_consultation_result(request: web.Request) -> web.Response:
         user_profile = session.get("user_profile") or {}
         if not user_profile:
             try:
-                resp = supabase_client.table("users").select("*").eq("telegram_id", session["user_id"]).single().execute()
+                resp = supabase_client.table("user_profiles").select("*").eq("user_id", session["user_id"]).single().execute()
                 user_profile = resp.data or {}
             except Exception:
                 pass
@@ -328,11 +328,11 @@ async def api_consultation_result(request: web.Request) -> web.Response:
         return json_response({"error": str(e)}, status=500)
 
 
-_PROFILE_FIELDS = ["first_name", "last_name", "phone", "date_of_birth", "sex", "height", "weight"]
+_PROFILE_FIELDS = ["full_name", "phone", "birthdate", "gender", "height", "weight"]
 
 
 async def api_profile_get(request: web.Request) -> web.Response:
-    """GET /api/profile/{user_id} — читает из таблицы users по telegram_id"""
+    """GET /api/profile/{user_id} — читает из таблицы user_profiles по user_id"""
     user_id = request.match_info.get("user_id")
     if not user_id:
         return json_response({"error": "user_id is required"}, status=400)
@@ -341,9 +341,9 @@ async def api_profile_get(request: web.Request) -> web.Response:
 
     try:
         resp = (
-            supabase_client.table("users")
+            supabase_client.table("user_profiles")
             .select(", ".join(_PROFILE_FIELDS))
-            .eq("telegram_id", int(user_id))
+            .eq("user_id", int(user_id))
             .limit(1)
             .execute()
         )
@@ -361,7 +361,7 @@ async def api_profile_get(request: web.Request) -> web.Response:
 
 
 async def api_profile_post(request: web.Request) -> web.Response:
-    """POST /api/profile/{user_id} — upsert в таблицу users по telegram_id"""
+    """POST /api/profile/{user_id} — upsert в таблицу user_profiles по user_id"""
     user_id = request.match_info.get("user_id")
     if not user_id:
         return json_response({"error": "user_id is required"}, status=400)
@@ -378,11 +378,11 @@ async def api_profile_post(request: web.Request) -> web.Response:
     if not update_data:
         return json_response({"error": "No valid profile fields provided"}, status=400)
 
-    update_data["telegram_id"] = int(user_id)
+    update_data["user_id"] = int(user_id)
     logger.info(f"Profile POST upsert data: {update_data}")
 
     try:
-        supabase_client.table("users").upsert(update_data, on_conflict="telegram_id").execute()
+        supabase_client.table("user_profiles").upsert(update_data, on_conflict="user_id").execute()
         logger.info(f"Profile POST success: user_id={user_id}")
         return json_response({"status": "ok"})
     except Exception as e:

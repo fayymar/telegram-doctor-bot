@@ -91,8 +91,8 @@ def _format_result(result: dict, duration: str) -> str:
 @router.message(F.text == "🩺 Новая консультация")
 async def start_consultation(message: Message, state: FSMContext):
     try:
-        response = supabase_client.table("users").select("telegram_id").eq(
-            "telegram_id", message.from_user.id
+        response = supabase_client.table("user_profiles").select("user_id").eq(
+            "user_id", message.from_user.id
         ).execute()
         if not response.data:
             await message.answer(
@@ -148,8 +148,8 @@ async def process_symptoms(message: Message, state: FSMContext):
     # Получаем профиль пользователя
     user_profile = {}
     try:
-        resp = supabase_client.table("users").select("*").eq(
-            "telegram_id", message.from_user.id
+        resp = supabase_client.table("user_profiles").select("*").eq(
+            "user_id", message.from_user.id
         ).execute()
         if resp.data:
             user_profile = resp.data[0]

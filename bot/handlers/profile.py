@@ -14,6 +14,7 @@ from bot.keyboards import (
     get_edit_profile_menu
 )
 from database.connection import supabase_client
+from postgrest.exceptions import APIError
 from services.phone_formatter import format_phone_number, get_phone_info
 from utils.logger import setup_logger
 from utils.validators import (
@@ -71,11 +72,37 @@ def _format_birthdate_and_age(birthdate_value):
 
 
 def _upsert_profile_with_fallback(profile_data: dict):
-    """Сохраняет профиль в таблицу users по telegram_id."""
-    return supabase_client.table("users").upsert(
-        profile_data,
-        on_conflict="telegram_id"
-    ).execute()
+    """
+    Сохраняет профиль и делает fallback,
+    если в БД ещё нет колонки language.
+    """
+    try:
+        return supabase_client.table("user_profiles").upsert(
+            profile_data,
+            on_conflict="user_id"
+        ).execute()
+    except APIError as e:
+        error_text = str(e).lower()
+        missing_language = (
+            "language" in error_text
+            and ("column" in error_text or "schema cache" in error_text)
+        )
+
+        if not missing_language:
+            raise
+
+        logger.warning(
+            "Column 'language' is missing in user_profiles. "
+            "Retrying profile save without language field."
+        )
+
+        fallback_data = dict(profile_data)
+        fallback_data.pop("language", None)
+
+        return supabase_client.table("user_profiles").upsert(
+            fallback_data,
+            on_conflict="user_id"
+        ).execute()
 
 
 async def process_phone_input(message: Message, phone_input: str) -> tuple[bool, str]:
@@ -167,9 +194,7 @@ async def process_language_choice(message: Message, state: FSMContext):
 async def show_profile(message: Message):
     """Показать профиль пользователя"""
     try:
-        response = supabase_client.table("users").select(
-            "first_name, last_name, phone, date_of_birth, sex, height, weight"
-        ).eq("telegram_id", message.from_user.id).execute()
+        response = supabase_client.table("user_profiles").select("*").eq("user_id", message.from_user.id).execute()
 
         if not response.data:
             await message.answer(
@@ -180,19 +205,16 @@ async def show_profile(message: Message):
             return
 
         profile = response.data[0]
+        lang = profile.get("language", "ru")
 
-        first_name = profile.get("first_name") or ""
-        last_name = profile.get("last_name") or ""
-        full_name = (first_name + " " + last_name).strip() or "не указано"
+        birthdate_formatted, age = _format_birthdate_and_age(profile.get("birthdate"))
 
-        birthdate_formatted, age = _format_birthdate_and_age(profile.get("date_of_birth"))
-
-        sex_code = profile.get("sex")
-        sex_text = GENDER_CODE_TO_TEXT["ru"].get(sex_code, "не указано")
+        gender_code = profile.get("gender")
+        sex_text = GENDER_CODE_TO_TEXT.get(lang, GENDER_CODE_TO_TEXT["ru"]).get(gender_code, "не указано")
 
         profile_text = "👤 *Ваш профиль*\n\n"
-        profile_text += f"*ФИО:* {full_name}\n"
-        profile_text += f"*Телефон:* {profile.get('phone') or 'не указано'}\n"
+        profile_text += f"*ФИО:* {profile.get('full_name', 'не указано')}\n"
+        profile_text += f"*Телефон:* {profile.get('phone', 'не указано')}\n"
         profile_text += f"*Дата рождения:* {birthdate_formatted}"
 
         if age is not None:
@@ -201,8 +223,8 @@ async def show_profile(message: Message):
             profile_text += "\n"
 
         profile_text += f"*Пол:* {sex_text}\n"
-        profile_text += f"*Рост:* {profile.get('height') or 'не указано'} см\n"
-        profile_text += f"*Вес:* {profile.get('weight') or 'не указано'} кг"
+        profile_text += f"*Рост:* {profile.get('height', 'не указано')} см\n"
+        profile_text += f"*Вес:* {profile.get('weight', 'не указано')} кг"
 
         await message.answer(
             profile_text,
@@ -231,9 +253,9 @@ async def show_bmi(message: Message):
     try:
         from utils.health_calculator import format_bmi_info
 
-        response = supabase_client.table("users").select(
-            "height, weight, sex"
-        ).eq("telegram_id", message.from_user.id).execute()
+        response = supabase_client.table("user_profiles").select(
+            "height, weight, gender"
+        ).eq("user_id", message.from_user.id).execute()
 
         if not response.data:
             await message.answer(
@@ -244,7 +266,7 @@ async def show_bmi(message: Message):
         profile = response.data[0]
         weight = profile.get("weight")
         height = profile.get("height")
-        gender = profile.get("sex")
+        gender = profile.get("gender")
 
         if not weight or not height:
             await message.answer(
@@ -497,19 +519,20 @@ async def process_weight(message: Message, state: FSMContext):
     data = await state.get_data()
 
     try:
-        full_name_parts = data["full_name"].strip().split()
-        first_name = full_name_parts[0] if full_name_parts else ""
-        last_name = " ".join(full_name_parts[1:]) if len(full_name_parts) > 1 else None
+        lang = data.get("language", "ru")
+        now_iso = datetime.now().isoformat()
 
         profile_data = {
-            "telegram_id": message.from_user.id,
-            "first_name": first_name,
-            "last_name": last_name,
+            "user_id": message.from_user.id,
+            "username": message.from_user.username,
+            "full_name": data["full_name"],
             "phone": data["phone"],
-            "date_of_birth": data["birthdate"],
-            "sex": data["gender"],
+            "birthdate": data["birthdate"],
+            "gender": data["gender"],
             "height": data["height"],
             "weight": data["weight"],
+            "language": lang,
+            "updated_at": now_iso,
         }
 
         result = _upsert_profile_with_fallback(profile_data)
@@ -671,13 +694,10 @@ async def edit_full_name(message: Message, state: FSMContext):
         return
 
     try:
-        parts = full_name.strip().split()
-        first_name = parts[0] if parts else ""
-        last_name = " ".join(parts[1:]) if len(parts) > 1 else None
-        supabase_client.table("users").update({
-            "first_name": first_name,
-            "last_name": last_name,
-        }).eq("telegram_id", message.from_user.id).execute()
+        supabase_client.table("user_profiles").update({
+            "full_name": full_name,
+            "updated_at": datetime.now().isoformat(),
+        }).eq("user_id", message.from_user.id).execute()
 
         await message.answer(f"✅ ФИО обновлено: {full_name}")
         await message.answer("Что ещё хотите изменить?", reply_markup=get_edit_profile_menu())
@@ -702,9 +722,10 @@ async def edit_phone(message: Message, state: FSMContext):
     try:
         phone_info = get_phone_info(phone_input)
 
-        supabase_client.table("users").update({
+        supabase_client.table("user_profiles").update({
             "phone": formatted_phone,
-        }).eq("telegram_id", message.from_user.id).execute()
+            "updated_at": datetime.now().isoformat(),
+        }).eq("user_id", message.from_user.id).execute()
 
         info_text = "✅ *Телефон обновлён:*\n\n"
         info_text += f"📱 {formatted_phone}\n"
@@ -732,9 +753,10 @@ async def edit_birthdate(message: Message, state: FSMContext):
         return
 
     try:
-        supabase_client.table("users").update({
-            "date_of_birth": birthdate.date().isoformat(),
-        }).eq("telegram_id", message.from_user.id).execute()
+        supabase_client.table("user_profiles").update({
+            "birthdate": birthdate.date().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+        }).eq("user_id", message.from_user.id).execute()
 
         if value.isdigit():
             text = f"✅ Возраст обновлён: {age} лет"
@@ -755,9 +777,10 @@ async def edit_gender(message: Message, state: FSMContext):
     gender = GENDER_TEXT_TO_CODE[message.text]
 
     try:
-        supabase_client.table("users").update({
-            "sex": gender,
-        }).eq("telegram_id", message.from_user.id).execute()
+        supabase_client.table("user_profiles").update({
+            "gender": gender,
+            "updated_at": datetime.now().isoformat(),
+        }).eq("user_id", message.from_user.id).execute()
 
         await message.answer(
             f"✅ Пол обновлён: {message.text}",
@@ -789,9 +812,10 @@ async def edit_height(message: Message, state: FSMContext):
         return
 
     try:
-        supabase_client.table("users").update({
+        supabase_client.table("user_profiles").update({
             "height": height,
-        }).eq("telegram_id", message.from_user.id).execute()
+            "updated_at": datetime.now().isoformat(),
+        }).eq("user_id", message.from_user.id).execute()
 
         await message.answer(f"✅ Рост обновлён: {height} см")
         await message.answer("Что ещё хотите изменить?", reply_markup=get_edit_profile_menu())
@@ -812,9 +836,10 @@ async def edit_weight(message: Message, state: FSMContext):
         return
 
     try:
-        supabase_client.table("users").update({
+        supabase_client.table("user_profiles").update({
             "weight": weight,
-        }).eq("telegram_id", message.from_user.id).execute()
+            "updated_at": datetime.now().isoformat(),
+        }).eq("user_id", message.from_user.id).execute()
 
         await message.answer(f"✅ Вес обновлён: {weight} кг")
         await message.answer("Что ещё хотите изменить?", reply_markup=get_edit_profile_menu())

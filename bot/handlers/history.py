@@ -183,9 +183,9 @@ async def export_anamnesis(message: Message):
         user_id = message.from_user.id
 
         # Получаем профиль пользователя
-        profile_response = supabase_client.table('users') \
+        profile_response = supabase_client.table('user_profiles') \
             .select('*') \
-            .eq('telegram_id', user_id) \
+            .eq('user_id', user_id) \
             .execute()
 
         if not profile_response.data or len(profile_response.data) == 0:
