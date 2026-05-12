@@ -147,6 +147,7 @@ async def api_consultation_start(request: web.Request) -> web.Response:
 
     session_id = str(uuid.uuid4())
     consultation_sessions[session_id] = {
+        "_created_at": datetime.utcnow(),
         "user_id": user_id,
         "symptoms": symptoms,
         "user_profile": user_profile,
@@ -315,6 +316,10 @@ async def api_consultation_result(request: web.Request) -> web.Response:
             }
             for s in specialists_raw
         ]
+
+        # Clean up session from memory after successful result
+        consultation_sessions.pop(session_id, None)
+        logger.info(f"Session {session_id} cleaned up after result")
 
         return json_response({
             "recommendation": recommendation.get("recommendation", recommendation.get("urgency_reason", "")),
@@ -849,6 +854,22 @@ async def _check_anamnesis_fields():
             )
 
 
+async def cleanup_stale_sessions():
+    """Удаляет сессии консультаций старше 2 часов из памяти."""
+    while True:
+        await asyncio.sleep(3600)  # каждый час
+        now = datetime.utcnow()
+        stale = []
+        for sid, session in list(consultation_sessions.items()):
+            created = session.get("_created_at")
+            if created and (now - created).total_seconds() > 7200:
+                stale.append(sid)
+        for sid in stale:
+            consultation_sessions.pop(sid, None)
+        if stale:
+            logger.info(f"Cleaned up {len(stale)} stale consultation sessions")
+
+
 async def start_bot():
     """Запуск бота с автоматическим перезапуском при ошибках"""
     retry_delay = 5
@@ -944,6 +965,7 @@ async def main():
         await asyncio.gather(
             start_web_server(),
             start_bot(),
+            cleanup_stale_sessions(),
             return_exceptions=True  # Не останавливаем всё при падении одной задачи
         )
     except Exception as e:
