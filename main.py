@@ -10,7 +10,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import MenuButtonDefault
 
 from config import BOT_TOKEN
-from bot.handlers import basic, profile, consultation, specialists, history, medications, health_diary, clinic_finder
+from bot.handlers import basic, profile, consultation, specialists, history, medications, health_diary, clinic_finder, fallback
 from bot.middlewares import FSMTimeoutMiddleware
 from utils.logger import setup_logger
 from services.consultation_agent import (
@@ -52,7 +52,8 @@ dp.include_router(medications.router)  # Напоминания о лекарс�
 dp.include_router(health_diary.router) # Дневник здоровья
 dp.include_router(clinic_finder.router) # Поиск клиник рядом
 dp.include_router(specialists.router)  # Поиск специалистов
-dp.include_router(consultation.router) # Консультации (должен быть последним)
+dp.include_router(consultation.router) # Консультации
+dp.include_router(fallback.router)    # Fallback для зависших FSM (ВСЕГДА ПОСЛЕДНИМ)
 
 
 # Хранилище сессий в памяти (для MVP)
