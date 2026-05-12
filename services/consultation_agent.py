@@ -12,6 +12,45 @@ logger = setup_logger(__name__)
 ai_service = AIService()
 
 
+# ── Medical profile helpers ───────────────────────────────────────────────────
+
+def format_medical_context(profile: dict) -> str:
+    """Форматирует анамнез пациента в текст для системного промпта AI."""
+    if not profile:
+        return ""
+    lines = []
+    chronic = profile.get("chronic_diseases") or []
+    if isinstance(chronic, list) and chronic:
+        lines.append(f"Хронические заболевания: {', '.join(chronic)}")
+    hereditary = profile.get("hereditary") or []
+    if isinstance(hereditary, list) and hereditary:
+        lines.append(f"Наследственность (у родственников): {', '.join(hereditary)}")
+    drug_allergies = (profile.get("drug_allergies") or "").strip()
+    if drug_allergies:
+        lines.append(f"Аллергии на лекарства: {drug_allergies}")
+    smoking = profile.get("smoking") or ""
+    smoking_map = {"yes": "курит", "no": "не курит", "quit": "бросил(а) курить"}
+    if smoking in smoking_map:
+        lines.append(f"Курение: {smoking_map[smoking]}")
+    return "\n".join(lines)
+
+
+def _build_medical_preamble(profile: dict) -> str:
+    """Возвращает блок с медицинским профилем для вставки перед системным промптом."""
+    ctx = format_medical_context(profile)
+    if not ctx:
+        return ""
+    return (
+        "МЕДИЦИНСКИЙ ПРОФИЛЬ ПАЦИЕНТА:\n"
+        f"{ctx}\n\n"
+        "ВАЖНО: Учитывай эти данные при анализе:\n"
+        "- Хронические заболевания могут быть причиной или отягощать симптомы\n"
+        "- При наследственности учитывай повышенные риски\n"
+        "- Аллергии на лекарства — НИКОГДА не рекомендуй эти препараты\n"
+        "- Возраст и пол влияют на вероятность заболеваний\n\n"
+    )
+
+
 # ── Health metrics helpers ────────────────────────────────────────────────────
 
 def get_recent_health_metrics(user_id: int, supabase_client, hours: int = 24) -> dict:
@@ -224,9 +263,19 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient
     # Задавай вопросы которые помогут ОТЛИЧИТЬ эти заболевания друг от друга.
     # """
 
-    system_prompt = f"""Ты — медицинский ассистент. Сгенерируй {num_questions} уточняющих вопроса для пациента (пол: {gender}, возраст: {age} лет, кластер: {primary_cluster}). Не спрашивай про давность симптомов.
-Генерируй ТОЛЬКО вопросы строго релевантные указанным симптомам. Если симптом — головная боль, спрашивай про характер боли, локализацию, сопутствующие симптомы головы/шеи. НЕ спрашивай про не связанные системы органов.{history_block}
-Ответь ТОЛЬКО валидным JSON массивом без markdown, без ```json, без пояснений. Пример: [{{"question": "Где болит?", "options": ["Голова", "Живот", "Ничего из этого"]}}]"""
+    medical_preamble = _build_medical_preamble(user_profile)
+    system_prompt = (
+        f"{medical_preamble}"
+        f"Ты — медицинский ассистент. Сгенерируй {num_questions} уточняющих вопроса для пациента "
+        f"(пол: {gender}, возраст: {age} лет, кластер: {primary_cluster}). "
+        f"Не спрашивай про давность симптомов.\n"
+        f"Генерируй ТОЛЬКО вопросы строго релевантные указанным симптомам. "
+        f"Если симптом — головная боль, спрашивай про характер боли, локализацию, "
+        f"сопутствующие симптомы головы/шеи. НЕ спрашивай про не связанные системы органов."
+        f"{history_block}\n"
+        f"Ответь ТОЛЬКО валидным JSON массивом без markdown, без ```json, без пояснений. "
+        f'Пример: [{{"question": "Где болит?", "options": ["Голова", "Живот", "Ничего из этого"]}}]'
+    )
 
     user_message = f"Симптомы пациента: {symptoms_text}"
 
@@ -433,7 +482,9 @@ def get_final_recommendation(
 
     metrics_block = _format_metrics_for_prompt(health_metrics) if health_metrics else ""
 
+    medical_preamble = _build_medical_preamble(user_profile)
     system_prompt = (
+        f"{medical_preamble}"
         "Ты опытный врач-диагност. На основе собранных данных определи наиболее вероятного специалиста.\n\n"
         f"Симптомы: {symptoms}\n"
         f"Ответы пациента: {followup_text}\n"

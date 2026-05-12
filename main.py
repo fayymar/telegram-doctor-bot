@@ -328,7 +328,10 @@ async def api_consultation_result(request: web.Request) -> web.Response:
         return json_response({"error": str(e)}, status=500)
 
 
-_PROFILE_FIELDS = ["full_name", "phone", "birthdate", "gender", "height", "weight"]
+_PROFILE_FIELDS = [
+    "full_name", "phone", "birthdate", "gender", "height", "weight",
+    "chronic_diseases", "drug_allergies", "smoking", "hereditary",
+]
 
 
 async def api_profile_get(request: web.Request) -> web.Response:
@@ -372,6 +375,7 @@ async def api_profile_post(request: web.Request) -> web.Response:
         return json_response({"error": "Invalid JSON"}, status=400)
 
     logger.info(f"Profile POST request: user_id={user_id}, body={body}")
+    logger.info(f"Saving profile fields: {list(body.keys())}")
 
     # Берём только допустимые поля профиля
     update_data = {k: v for k, v in body.items() if k in _PROFILE_FIELDS}
@@ -813,6 +817,37 @@ async def api_health_metrics_get(request: web.Request) -> web.Response:
         return json_response({'error': str(e)}, status=500)
 
 
+async def _check_anamnesis_fields():
+    """Проверяет наличие полей анамнеза в user_profiles; пытается добавить их если нет."""
+    try:
+        supabase_client.table("user_profiles").select(
+            "chronic_diseases, drug_allergies, smoking, hereditary"
+        ).limit(1).execute()
+        logger.info("✅ Anamnesis fields present in user_profiles")
+    except Exception as e:
+        logger.warning(f"MISSING FIELDS in user_profiles: {e}")
+        logger.warning("Attempting to add anamnesis fields via SQL migration...")
+        try:
+            supabase_client.rpc("exec_sql", {"query": (
+                "ALTER TABLE user_profiles "
+                "ADD COLUMN IF NOT EXISTS chronic_diseases TEXT[] DEFAULT '{}',"
+                "ADD COLUMN IF NOT EXISTS drug_allergies TEXT DEFAULT '',"
+                "ADD COLUMN IF NOT EXISTS smoking TEXT DEFAULT 'no',"
+                "ADD COLUMN IF NOT EXISTS hereditary TEXT[] DEFAULT '{}';"
+            )}).execute()
+            logger.info("✅ Anamnesis fields added via SQL migration")
+        except Exception as rpc_err:
+            logger.error(
+                f"Cannot add fields automatically (rpc failed: {rpc_err}). "
+                "Please run this SQL manually in Supabase:\n"
+                "ALTER TABLE user_profiles "
+                "ADD COLUMN IF NOT EXISTS chronic_diseases TEXT[] DEFAULT '{}',"
+                "ADD COLUMN IF NOT EXISTS drug_allergies TEXT DEFAULT '',"
+                "ADD COLUMN IF NOT EXISTS smoking TEXT DEFAULT 'no',"
+                "ADD COLUMN IF NOT EXISTS hereditary TEXT[] DEFAULT '{}';"
+            )
+
+
 async def start_bot():
     """Запуск бота с автоматическим перезапуском при ошибках"""
     retry_delay = 5
@@ -820,6 +855,9 @@ async def start_bot():
     while True:
         try:
             logger.info("🤖 Starting Telegram bot...")
+
+            # Проверяем поля анамнеза в БД
+            await _check_anamnesis_fields()
 
             # Удаляем старые вебхуки (если есть)
             await bot.delete_webhook(drop_pending_updates=True)

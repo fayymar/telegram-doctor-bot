@@ -1,6 +1,6 @@
 from datetime import datetime
 from aiogram import Router, F
-from aiogram.types import Message, ReplyKeyboardRemove
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 
 from bot.states import Registration, EditProfile
@@ -71,11 +71,80 @@ def _format_birthdate_and_age(birthdate_value):
         return str(birthdate_value), None
 
 
+_OPTIONAL_PROFILE_COLUMNS = {
+    "language", "chronic_diseases", "drug_allergies", "smoking", "hereditary",
+}
+
+_CHRONIC_OPTIONS = {
+    "Гипертония", "Диабет 1 типа", "Диабет 2 типа", "Болезни сердца",
+    "Астма", "ХОБЛ", "Гастрит/язва", "Болезни почек",
+    "Щитовидная железа", "Эпилепсия",
+}
+_HEREDITARY_OPTIONS = {
+    "Болезни сердца", "Инсульт", "Диабет", "Онкология",
+    "Гипертония", "Альцгеймер",
+}
+_ALLERGY_OPTIONS = {
+    "Пенициллин/антибиотики", "Аспирин/НПВП", "Сульфаниламиды", "Анестетики",
+}
+_SMOKING_MAP = {
+    "🚭 Не курю": "no",
+    "🚬 Курю": "yes",
+    "✅ Бросил(а)": "quit",
+}
+
+
+def _make_chronic_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Гипертония"), KeyboardButton(text="Диабет 1 типа")],
+            [KeyboardButton(text="Диабет 2 типа"), KeyboardButton(text="Болезни сердца")],
+            [KeyboardButton(text="Астма"), KeyboardButton(text="ХОБЛ")],
+            [KeyboardButton(text="Гастрит/язва"), KeyboardButton(text="Болезни почек")],
+            [KeyboardButton(text="Щитовидная железа"), KeyboardButton(text="Эпилепсия")],
+            [KeyboardButton(text="✅ Ничего из этого"), KeyboardButton(text="➡️ Готово")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def _make_hereditary_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Болезни сердца"), KeyboardButton(text="Инсульт")],
+            [KeyboardButton(text="Диабет"), KeyboardButton(text="Онкология")],
+            [KeyboardButton(text="Гипертония"), KeyboardButton(text="Альцгеймер")],
+            [KeyboardButton(text="✅ Ничего из этого"), KeyboardButton(text="➡️ Готово")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def _make_allergy_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Пенициллин/антибиотики"), KeyboardButton(text="Аспирин/НПВП")],
+            [KeyboardButton(text="Сульфаниламиды"), KeyboardButton(text="Анестетики")],
+            [KeyboardButton(text="✅ Аллергий нет"), KeyboardButton(text="✏️ Написать своё")],
+            [KeyboardButton(text="➡️ Готово")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def _make_smoking_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[
+            KeyboardButton(text="🚭 Не курю"),
+            KeyboardButton(text="🚬 Курю"),
+            KeyboardButton(text="✅ Бросил(а)"),
+        ]],
+        resize_keyboard=True,
+    )
+
+
 def _upsert_profile_with_fallback(profile_data: dict):
-    """
-    Сохраняет профиль и делает fallback,
-    если в БД ещё нет колонки language.
-    """
+    """Сохраняет профиль; при ошибке схемы повторяет без необязательных колонок."""
     try:
         return supabase_client.table("user_profiles").upsert(
             profile_data,
@@ -83,22 +152,11 @@ def _upsert_profile_with_fallback(profile_data: dict):
         ).execute()
     except APIError as e:
         error_text = str(e).lower()
-        missing_language = (
-            "language" in error_text
-            and ("column" in error_text or "schema cache" in error_text)
-        )
-
-        if not missing_language:
+        if "column" not in error_text and "schema cache" not in error_text:
             raise
-
-        logger.warning(
-            "Column 'language' is missing in user_profiles. "
-            "Retrying profile save without language field."
-        )
-
-        fallback_data = dict(profile_data)
-        fallback_data.pop("language", None)
-
+        logger.warning(f"Schema error, retrying without optional columns: {e}")
+        fallback_data = {k: v for k, v in profile_data.items()
+                        if k not in _OPTIONAL_PROFILE_COLUMNS}
         return supabase_client.table("user_profiles").upsert(
             fallback_data,
             on_conflict="user_id"
@@ -501,7 +559,7 @@ async def process_height(message: Message, state: FSMContext):
 
 @router.message(Registration.waiting_for_weight, F.text)
 async def process_weight(message: Message, state: FSMContext):
-    """Обработка веса и завершение регистрации"""
+    """Обработка веса — переход к анамнезу"""
     weight_str = sanitize_text(message.text)
 
     is_valid, error_message, weight = validate_weight(weight_str)
@@ -509,19 +567,179 @@ async def process_weight(message: Message, state: FSMContext):
         await message.answer(error_message)
         return
 
-    await state.update_data(weight=weight)
+    await state.update_data(weight=weight, selected_chronic=[])
 
     await message.answer(
         f"✅ Вес: {weight} кг",
         reply_markup=ReplyKeyboardRemove()
     )
 
+    await message.answer(
+        "📋 *Медицинская история (шаг 1 из 4)*\n\n"
+        "Есть ли у вас хронические заболевания? "
+        "Выберите все подходящие и нажмите «Готово»:",
+        reply_markup=_make_chronic_keyboard(),
+        parse_mode="Markdown",
+    )
+
+    await state.set_state(Registration.waiting_for_chronic)
+
+
+# =========================================================
+# ЭТАП 7: ХРОНИЧЕСКИЕ ЗАБОЛЕВАНИЯ
+# =========================================================
+
+@router.message(Registration.waiting_for_chronic, F.text.in_(_CHRONIC_OPTIONS))
+async def process_chronic_option(message: Message, state: FSMContext):
+    data = await state.get_data()
+    selected = list(data.get("selected_chronic") or [])
+    if message.text not in selected:
+        selected.append(message.text)
+    await state.update_data(selected_chronic=selected)
+    await message.answer(
+        f"✅ Добавлено: {message.text}\n"
+        f"Выбрано: {', '.join(selected)}\n\n"
+        "Ещё выберите или нажмите «Готово»",
+        reply_markup=_make_chronic_keyboard(),
+    )
+
+
+@router.message(Registration.waiting_for_chronic, F.text == "✅ Ничего из этого")
+async def process_chronic_none(message: Message, state: FSMContext):
+    await state.update_data(selected_chronic=[])
+    await _show_hereditary_step(message, state)
+
+
+@router.message(Registration.waiting_for_chronic, F.text == "➡️ Готово")
+async def process_chronic_done(message: Message, state: FSMContext):
+    await _show_hereditary_step(message, state)
+
+
+async def _show_hereditary_step(message: Message, state: FSMContext):
+    await state.update_data(selected_hereditary=[])
+    await state.set_state(Registration.waiting_for_hereditary)
+    await message.answer(
+        "📋 *Медицинская история (шаг 2 из 4)*\n\n"
+        "Есть ли у ваших близких родственников эти заболевания?",
+        reply_markup=_make_hereditary_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+# =========================================================
+# ЭТАП 8: НАСЛЕДСТВЕННЫЕ ЗАБОЛЕВАНИЯ
+# =========================================================
+
+@router.message(Registration.waiting_for_hereditary, F.text.in_(_HEREDITARY_OPTIONS))
+async def process_hereditary_option(message: Message, state: FSMContext):
+    data = await state.get_data()
+    selected = list(data.get("selected_hereditary") or [])
+    if message.text not in selected:
+        selected.append(message.text)
+    await state.update_data(selected_hereditary=selected)
+    await message.answer(
+        f"✅ Добавлено: {message.text}\n"
+        f"Выбрано: {', '.join(selected)}\n\n"
+        "Ещё выберите или нажмите «Готово»",
+        reply_markup=_make_hereditary_keyboard(),
+    )
+
+
+@router.message(Registration.waiting_for_hereditary, F.text == "✅ Ничего из этого")
+async def process_hereditary_none(message: Message, state: FSMContext):
+    await state.update_data(selected_hereditary=[])
+    await _show_allergy_step(message, state)
+
+
+@router.message(Registration.waiting_for_hereditary, F.text == "➡️ Готово")
+async def process_hereditary_done(message: Message, state: FSMContext):
+    await _show_allergy_step(message, state)
+
+
+async def _show_allergy_step(message: Message, state: FSMContext):
+    await state.update_data(selected_allergies=[])
+    await state.set_state(Registration.waiting_for_allergies)
+    await message.answer(
+        "📋 *Медицинская история (шаг 3 из 4)*\n\n"
+        "Есть ли у вас аллергия на лекарства?",
+        reply_markup=_make_allergy_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+# =========================================================
+# ЭТАП 9: АЛЛЕРГИИ НА ЛЕКАРСТВА
+# =========================================================
+
+@router.message(Registration.waiting_for_allergies, F.text.in_(_ALLERGY_OPTIONS))
+async def process_allergy_option(message: Message, state: FSMContext):
+    data = await state.get_data()
+    selected = list(data.get("selected_allergies") or [])
+    if message.text not in selected:
+        selected.append(message.text)
+    await state.update_data(selected_allergies=selected)
+    await message.answer(
+        f"✅ Добавлено: {message.text}\n"
+        f"Выбрано: {', '.join(selected)}\n\n"
+        "Ещё выберите, нажмите «Готово» или введите своё",
+        reply_markup=_make_allergy_keyboard(),
+    )
+
+
+@router.message(Registration.waiting_for_allergies, F.text == "✅ Аллергий нет")
+async def process_allergy_none(message: Message, state: FSMContext):
+    await state.update_data(selected_allergies=[])
+    await _show_smoking_step(message, state)
+
+
+@router.message(Registration.waiting_for_allergies, F.text == "➡️ Готово")
+async def process_allergy_done(message: Message, state: FSMContext):
+    await _show_smoking_step(message, state)
+
+
+@router.message(Registration.waiting_for_allergies, F.text == "✏️ Написать своё")
+async def process_allergy_custom_start(message: Message, state: FSMContext):
+    await state.set_state(Registration.waiting_for_allergies_text)
+    await message.answer(
+        "✏️ Напишите, на какие лекарства у вас аллергия:",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+
+@router.message(Registration.waiting_for_allergies_text, F.text)
+async def process_allergy_text(message: Message, state: FSMContext):
+    await state.update_data(selected_allergies=[sanitize_text(message.text)])
+    await _show_smoking_step(message, state)
+
+
+async def _show_smoking_step(message: Message, state: FSMContext):
+    await state.set_state(Registration.waiting_for_smoking)
+    await message.answer(
+        "📋 *Медицинская история (шаг 4 из 4)*\n\n"
+        "Вы курите?",
+        reply_markup=_make_smoking_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+# =========================================================
+# ЭТАП 10: КУРЕНИЕ + ФИНАЛЬНОЕ СОХРАНЕНИЕ ПРОФИЛЯ
+# =========================================================
+
+@router.message(Registration.waiting_for_smoking, F.text.in_(list(_SMOKING_MAP.keys())))
+async def process_smoking(message: Message, state: FSMContext):
+    """Сохраняет курение и финально сохраняет весь профиль с анамнезом."""
+    smoking_value = _SMOKING_MAP[message.text]
     data = await state.get_data()
 
-    try:
-        lang = data.get("language", "ru")
-        now_iso = datetime.now().isoformat()
+    lang = data.get("language", "ru")
+    now_iso = datetime.now().isoformat()
 
+    chronic_list = data.get("selected_chronic") or []
+    hereditary_list = data.get("selected_hereditary") or []
+    allergies_str = ", ".join(data.get("selected_allergies") or [])
+
+    try:
         profile_data = {
             "user_id": message.from_user.id,
             "username": message.from_user.username,
@@ -533,41 +751,30 @@ async def process_weight(message: Message, state: FSMContext):
             "weight": data["weight"],
             "language": lang,
             "updated_at": now_iso,
+            "chronic_diseases": chronic_list,
+            "hereditary": hereditary_list,
+            "drug_allergies": allergies_str,
+            "smoking": smoking_value,
         }
 
-        result = _upsert_profile_with_fallback(profile_data)
-
+        _upsert_profile_with_fallback(profile_data)
         logger.info(
-            "Профиль сохранён успешно | user_id=%s | result=%s",
-            message.from_user.id,
-            result
+            "Full profile + anamnesis saved | user_id=%s | chronic=%s | hereditary=%s | allergies=%s | smoking=%s",
+            message.from_user.id, chronic_list, hereditary_list, allergies_str, smoking_value,
         )
-
-        completion_texts = {
-            "ru": (
-                "🎉 *Регистрация завершена!*\n\n"
-                "Ваш профиль успешно создан.\n"
-                "Теперь вы можете пользоваться всеми функциями бота!"
-            ),
-            "uz": (
-                "🎉 *Ro'yxatdan o'tish yakunlandi!*\n\n"
-                "Profilingiz muvaffaqiyatli yaratildi.\n"
-                "Endi siz botning barcha funksiyalaridan foydalanishingiz mumkin!"
-            )
-        }
 
         await message.answer(
-            completion_texts.get(lang, completion_texts["ru"]),
+            "🎉 *Профиль и медицинская история сохранены!*\n\n"
+            "Теперь AI-диагностика будет учитывать ваши данные "
+            "для более точных рекомендаций.",
             reply_markup=get_main_menu(),
-            parse_mode="Markdown"
+            parse_mode="Markdown",
         )
-
         await message.answer(
             "✅ Профиль сохранён! Вы можете просматривать и редактировать его "
             "в приложении СимптоМед (кнопка внизу экрана)."
         )
 
-        # Устанавливаем Menu Button после завершения регистрации
         try:
             await set_webapp_menu_button(message.bot, message.chat.id)
             logger.info("Menu button set after registration | user_id=%s", message.from_user.id)
@@ -578,13 +785,8 @@ async def process_weight(message: Message, state: FSMContext):
 
     except Exception as e:
         logger.exception("Ошибка при сохранении профиля user_id=%s", message.from_user.id)
-
-        error_text = str(e)
-        if len(error_text) > 500:
-            error_text = error_text[:500] + "..."
-
         await message.answer(
-            f"❌ Ошибка при сохранении профиля:\n{error_text}\n\n"
+            f"❌ Ошибка при сохранении профиля:\n{str(e)[:500]}\n\n"
             "Попробуйте ещё раз: /start"
         )
         await state.clear()

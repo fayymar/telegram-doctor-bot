@@ -10,6 +10,12 @@ class Registration(StatesGroup):
     waiting_for_gender = State()
     waiting_for_height = State()
     waiting_for_weight = State()
+    # Анамнез (медицинская история)
+    waiting_for_chronic = State()
+    waiting_for_hereditary = State()
+    waiting_for_allergies = State()
+    waiting_for_allergies_text = State()
+    waiting_for_smoking = State()
 
 
 class EditProfile(StatesGroup):
