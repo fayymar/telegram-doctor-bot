@@ -393,7 +393,7 @@ async def back_to_name(message: Message, state: FSMContext):
     await state.set_state(Registration.waiting_for_full_name)
     await message.answer(
         "◀️ Вернулись к шагу 1\n\nВведите ваше ФИО:",
-        reply_markup=get_step_keyboard_with_back()
+        reply_markup=get_cancel_keyboard()
     )
 
 
@@ -500,6 +500,12 @@ async def cancel_registration(message: Message, state: FSMContext):
         )
     else:
         pass  # Не наша отмена, пусть другой обработчик поймает
+
+
+@router.message(Registration.waiting_for_full_name, F.text.in_(["◀️ Назад"]))
+async def back_at_step1(message: Message, state: FSMContext):
+    """На шаге 1 некуда идти назад."""
+    await message.answer("Это первый шаг — назад некуда. Введите ваше имя:")
 
 
 @router.message(Registration.waiting_for_full_name, F.text)

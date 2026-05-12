@@ -13,24 +13,10 @@ def validate_full_name(full_name: str) -> Tuple[bool, str]:
     if len(full_name) < 3:
         return False, "❌ ФИО слишком короткое (минимум 3 символа)"
 
-    words = full_name.split()
-    if len(words) < 2:
-        return False, "❌ Пожалуйста, укажите хотя бы Фамилию и Имя\nНапример: Иванов Иван"
-
     if len(full_name) > 100:
-        return False, "❌ ФИО слишком длинное (максимум 100 символов)"
+        return False, "❌ Имя слишком длинное (максимум 100 символов)"
 
-    if not re.match(r"^[a-zA-Zа-яА-ЯёЁ\s\-']+$", full_name):
-        return False, "❌ ФИО должно содержать только буквы, пробелы и дефисы\nБез цифр и специальных символов"
-
-    for word in words:
-        if len(word) > 0 and not word[0].isupper():
-            return False, "❌ Каждое слово должно начинаться с заглавной буквы\nНапример: Иванов Иван Петрович"
-
-    for word in words[:-1]:
-        if len(word) < 2:
-            return False, "❌ Имя и фамилия должны содержать минимум 2 буквы"
-
+    # Принимаем любое имя — одно слово или несколько, любой регистр
     return True, ""
 
 
