@@ -14,7 +14,9 @@ from bot.keyboards import (
     get_gender_keyboard,
     get_cancel_keyboard,
     get_profile_menu,
-    get_edit_profile_menu
+    get_edit_profile_menu,
+    get_step_keyboard_with_back,
+    get_phone_keyboard_with_back,
 )
 from database.connection import supabase_client
 from postgrest.exceptions import APIError
