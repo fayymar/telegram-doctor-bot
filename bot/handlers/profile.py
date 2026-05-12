@@ -375,6 +375,131 @@ async def show_bmi(message: Message):
 # ЭТАП 1: ФИО
 # =========================================================
 
+
+# =========================================================
+# КНОПКА НАЗАД — обработчики для каждого шага
+# =========================================================
+
+BACK_TEXT = "◀️ Назад"
+CANCEL_TEXT = "❌ Отмена"
+
+@router.message(Registration.waiting_for_phone, F.text == BACK_TEXT)
+async def back_to_name(message: Message, state: FSMContext):
+    """Назад к вводу ФИО."""
+    data = await state.get_data()
+    lang = data.get("language", "ru")
+    await state.set_state(Registration.waiting_for_full_name)
+    await message.answer(
+        "◀️ Вернулись к шагу 1\n\nВведите ваше ФИО:",
+        reply_markup=get_step_keyboard_with_back()
+    )
+
+
+@router.message(Registration.waiting_for_birthdate, F.text == BACK_TEXT)
+async def back_to_phone(message: Message, state: FSMContext):
+    """Назад к вводу телефона."""
+    await state.set_state(Registration.waiting_for_phone)
+    await message.answer(
+        "◀️ Вернулись к шагу 2\n\n📱 Введите номер телефона:",
+        reply_markup=get_phone_keyboard_with_back()
+    )
+
+
+@router.message(Registration.waiting_for_gender, F.text == BACK_TEXT)
+async def back_to_birthdate(message: Message, state: FSMContext):
+    """Назад к вводу даты рождения."""
+    await state.set_state(Registration.waiting_for_birthdate)
+    await message.answer(
+        "◀️ Вернулись к шагу 3\n\n🎂 Введите дату рождения (ДД.ММ.ГГГГ):",
+        reply_markup=get_step_keyboard_with_back()
+    )
+
+
+@router.message(Registration.waiting_for_height, F.text == BACK_TEXT)
+async def back_to_gender(message: Message, state: FSMContext):
+    """Назад к выбору пола."""
+    await state.set_state(Registration.waiting_for_gender)
+    await message.answer(
+        "◀️ Вернулись к шагу 4\n\n⚧ Укажите ваш пол:",
+        reply_markup=get_gender_keyboard()
+    )
+
+
+@router.message(Registration.waiting_for_weight, F.text == BACK_TEXT)
+async def back_to_height(message: Message, state: FSMContext):
+    """Назад к вводу роста."""
+    await state.set_state(Registration.waiting_for_height)
+    await message.answer(
+        "◀️ Вернулись к шагу 5\n\n📏 Введите ваш рост в сантиметрах (например: 175):",
+        reply_markup=get_step_keyboard_with_back()
+    )
+
+
+@router.message(Registration.waiting_for_chronic, F.text == BACK_TEXT)
+async def back_to_weight(message: Message, state: FSMContext):
+    """Назад к вводу веса."""
+    await state.set_state(Registration.waiting_for_weight)
+    await message.answer(
+        "◀️ Вернулись к шагу 6\n\n⚖️ Введите ваш вес в кг (например: 70):",
+        reply_markup=get_step_keyboard_with_back()
+    )
+
+
+@router.message(Registration.waiting_for_hereditary, F.text == BACK_TEXT)
+async def back_to_chronic(message: Message, state: FSMContext):
+    """Назад к хроническим заболеваниям."""
+    data = await state.get_data()
+    selected = data.get("chronic_diseases", [])
+    await state.set_state(Registration.waiting_for_chronic)
+    from bot.handlers.profile import build_chronic_keyboard
+    await message.answer(
+        "◀️ Вернулись к шагу 1 из 4 (анамнез)\n\nВыберите хронические заболевания:",
+        reply_markup=build_chronic_keyboard(selected)
+    )
+
+
+@router.message(Registration.waiting_for_allergies, F.text == BACK_TEXT)
+@router.message(Registration.waiting_for_allergies_text, F.text == BACK_TEXT)
+async def back_to_hereditary(message: Message, state: FSMContext):
+    """Назад к наследственным заболеваниям."""
+    data = await state.get_data()
+    selected = data.get("hereditary", [])
+    await state.set_state(Registration.waiting_for_hereditary)
+    from bot.handlers.profile import build_hereditary_keyboard
+    await message.answer(
+        "◀️ Вернулись к шагу 2 из 4 (анамнез)\n\nВыберите наследственные заболевания:",
+        reply_markup=build_hereditary_keyboard(selected)
+    )
+
+
+@router.message(Registration.waiting_for_smoking, F.text == BACK_TEXT)
+async def back_to_allergies(message: Message, state: FSMContext):
+    """Назад к аллергиям."""
+    data = await state.get_data()
+    selected = data.get("allergies_selected", [])
+    await state.set_state(Registration.waiting_for_allergies)
+    from bot.handlers.profile import build_allergies_keyboard
+    await message.answer(
+        "◀️ Вернулись к шагу 3 из 4 (анамнез)\n\nЕсть ли аллергия на лекарства?",
+        reply_markup=build_allergies_keyboard(selected)
+    )
+
+
+# Отмена регистрации из любого шага
+@router.message(F.text == CANCEL_TEXT)
+async def cancel_registration(message: Message, state: FSMContext):
+    """Отмена из любого шага регистрации."""
+    current = await state.get_state()
+    if current and current.startswith("Registration"):
+        await state.clear()
+        await message.answer(
+            "❌ Регистрация отменена.\n\nДля начала отправьте /start",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        pass  # Не наша отмена, пусть другой обработчик поймает
+
+
 @router.message(Registration.waiting_for_full_name, F.text)
 async def process_full_name(message: Message, state: FSMContext):
     """Обработка ФИО"""
@@ -402,7 +527,7 @@ async def process_full_name(message: Message, state: FSMContext):
         "• +998 90 123 45 67\n"
         "• 998901234567\n"
         "• 90 123 45 67",
-        reply_markup=get_phone_keyboard(),
+        reply_markup=get_phone_keyboard_with_back(),
         parse_mode="Markdown"
     )
 
@@ -431,7 +556,7 @@ async def process_phone_contact(message: Message, state: FSMContext):
         "• 29\n\n"
         "Или датой рождения:\n"
         "• 15.03.1990",
-        reply_markup=get_cancel_keyboard(),
+        reply_markup=get_step_keyboard_with_back(),
         parse_mode="Markdown"
     )
 
@@ -456,7 +581,7 @@ async def process_phone_text(message: Message, state: FSMContext):
         "• 29\n\n"
         "Или датой рождения:\n"
         "• 15.03.1990",
-        reply_markup=get_cancel_keyboard(),
+        reply_markup=get_step_keyboard_with_back(),
         parse_mode="Markdown"
     )
 
@@ -525,7 +650,7 @@ async def process_gender(message: Message, state: FSMContext):
         "📏 *Шаг 5 из 6*\n\n"
         "Введите ваш рост в сантиметрах\n"
         "Например: 175",
-        reply_markup=get_cancel_keyboard(),
+        reply_markup=get_step_keyboard_with_back(),
         parse_mode="Markdown"
     )
 

@@ -46,6 +46,26 @@ def get_gender_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 
+
+def get_step_keyboard_with_back(extra_buttons: list = None) -> ReplyKeyboardMarkup:
+    """Клавиатура для шагов регистрации с кнопкой Назад."""
+    keyboard = []
+    if extra_buttons:
+        for row in extra_buttons:
+            keyboard.append(row)
+    keyboard.append([KeyboardButton(text="◀️ Назад"), KeyboardButton(text="❌ Отмена")])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def get_phone_keyboard_with_back() -> ReplyKeyboardMarkup:
+    """Клавиатура для шага телефона с кнопкой Назад."""
+    keyboard = [
+        [KeyboardButton(text="📱 Поделиться номером", request_contact=True)],
+        [KeyboardButton(text="◀️ Назад"), KeyboardButton(text="❌ Отмена")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
 def get_cancel_keyboard() -> ReplyKeyboardMarkup:
     """Клавиатура с кнопкой отмены"""
     keyboard = [[KeyboardButton(text="❌ Отменить")]]
