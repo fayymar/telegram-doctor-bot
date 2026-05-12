@@ -112,6 +112,7 @@ def build_chronic_reply_keyboard(selected: list) -> ReplyKeyboardMarkup:
         KeyboardButton(text="🚫 Ничего из этого"),
         KeyboardButton(text="➡️ Готово"),
     ])
+    buttons.append([KeyboardButton(text="◀️ Назад")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -127,6 +128,7 @@ def build_hereditary_reply_keyboard(selected: list) -> ReplyKeyboardMarkup:
         KeyboardButton(text="🚫 Ничего из этого"),
         KeyboardButton(text="➡️ Готово"),
     ])
+    buttons.append([KeyboardButton(text="◀️ Назад")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -142,7 +144,7 @@ def build_allergy_reply_keyboard(selected: list) -> ReplyKeyboardMarkup:
         KeyboardButton(text="Аллергий нет"),
         KeyboardButton(text="✏️ Написать своё"),
     ])
-    buttons.append([KeyboardButton(text="➡️ Готово")])
+    buttons.append([KeyboardButton(text="➡️ Готово"), KeyboardButton(text="◀️ Назад")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -453,10 +455,9 @@ async def back_to_chronic(message: Message, state: FSMContext):
     data = await state.get_data()
     selected = data.get("chronic_diseases", [])
     await state.set_state(Registration.waiting_for_chronic)
-    from bot.handlers.profile import build_chronic_keyboard
     await message.answer(
         "◀️ Вернулись к шагу 1 из 4 (анамнез)\n\nВыберите хронические заболевания:",
-        reply_markup=build_chronic_keyboard(selected)
+        reply_markup=build_chronic_reply_keyboard(selected)
     )
 
 
@@ -467,10 +468,9 @@ async def back_to_hereditary(message: Message, state: FSMContext):
     data = await state.get_data()
     selected = data.get("hereditary", [])
     await state.set_state(Registration.waiting_for_hereditary)
-    from bot.handlers.profile import build_hereditary_keyboard
     await message.answer(
         "◀️ Вернулись к шагу 2 из 4 (анамнез)\n\nВыберите наследственные заболевания:",
-        reply_markup=build_hereditary_keyboard(selected)
+        reply_markup=build_hereditary_reply_keyboard(selected)
     )
 
 
@@ -480,10 +480,9 @@ async def back_to_allergies(message: Message, state: FSMContext):
     data = await state.get_data()
     selected = data.get("allergies_selected", [])
     await state.set_state(Registration.waiting_for_allergies)
-    from bot.handlers.profile import build_allergies_keyboard
     await message.answer(
         "◀️ Вернулись к шагу 3 из 4 (анамнез)\n\nЕсть ли аллергия на лекарства?",
-        reply_markup=build_allergies_keyboard(selected)
+        reply_markup=build_allergy_reply_keyboard(selected)
     )
 
 
