@@ -254,6 +254,20 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient
 - Если симптомы похожи на прошлые — уточни изменилось ли что-то
 """
 
+    skip_instruction = ""
+    chronic = user_profile.get("chronic_diseases") or []
+    if chronic:
+        chronic_str = ", ".join(chronic) if isinstance(chronic, list) else str(chronic)
+        skip_instruction = (
+            f"\nВАЖНО: У пациента УЖЕ ИЗВЕСТНЫ хронические заболевания: {chronic_str}. "
+            "НЕ задавай вопросы о хронических заболеваниях, аллергиях или наследственности — "
+            "эти данные уже есть в профиле. Задавай только вопросы КОНКРЕТНО о текущих симптомах:\n"
+            "- Где именно болит/беспокоит?\n"
+            "- Как давно?\n"
+            "- Что усиливает/ослабляет симптом?\n"
+            "- Есть ли сопутствующие симптомы?"
+        )
+
     # rag_block = ""
     # if rag_context:
     #     rag_block = f"""
@@ -272,7 +286,8 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient
         f"Генерируй ТОЛЬКО вопросы строго релевантные указанным симптомам. "
         f"Если симптом — головная боль, спрашивай про характер боли, локализацию, "
         f"сопутствующие симптомы головы/шеи. НЕ спрашивай про не связанные системы органов."
-        f"{history_block}\n"
+        f"{history_block}"
+        f"{skip_instruction}\n"
         f"Ответь ТОЛЬКО валидным JSON массивом без markdown, без ```json, без пояснений. "
         f'Пример: [{{"question": "Где болит?", "options": ["Голова", "Живот", "Ничего из этого"]}}]'
     )

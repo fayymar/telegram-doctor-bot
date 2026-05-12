@@ -142,7 +142,8 @@ async def cmd_profile(message: Message):
     user_id = message.from_user.id
     try:
         resp = supabase_client.table("user_profiles").select(
-            "full_name, phone, birthdate, gender, height, weight"
+            "full_name, phone, birthdate, gender, height, weight, "
+            "chronic_diseases, drug_allergies, smoking, hereditary"
         ).eq("user_id", user_id).limit(1).execute()
 
         rows = resp.data or []
@@ -172,6 +173,11 @@ async def cmd_profile(message: Message):
         sex_map = {"male": "Мужской", "female": "Женский"}
         sex = sex_map.get(p.get("gender") or "", "не указано")
 
+        chronic = p.get("chronic_diseases") or []
+        hereditary = p.get("hereditary") or []
+        allergies = (p.get("drug_allergies") or "").strip()
+        smoking_map = {"yes": "🚬 Курит", "quit": "✅ Бросил(а)", "no": "🚭 Не курит"}
+
         lines = [
             "👤 Ваш профиль:\n",
             f"Имя: {name}",
@@ -180,7 +186,12 @@ async def cmd_profile(message: Message):
             f"Рост: {p.get('height') or 'не указано'} см",
             f"Вес: {p.get('weight') or 'не указано'} кг",
             f"Телефон: {p.get('phone') or 'не указано'}",
-            "\nВы можете изменить данные в приложении СимптоМед (кнопка внизу экрана).",
+            "",
+            f"Хронические: {', '.join(chronic) if chronic else 'не указано'}",
+            f"Наследственность: {', '.join(hereditary) if hereditary else 'не указано'}",
+            f"Аллергии: {allergies if allergies else 'не указано'}",
+            f"Курение: {smoking_map.get(p.get('smoking', 'no'), '—')}",
+            "\nДля обновления используйте кнопку «Профиль» в меню.",
         ]
         await message.answer("\n".join(lines))
 
