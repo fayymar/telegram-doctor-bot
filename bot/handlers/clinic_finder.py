@@ -52,7 +52,7 @@ def get_clinic_search_options(lat: float, lon: float) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-@router.message(F.text == "🗺 Найти клиники")
+@router.message(F.text.in_({"🗺 Найти клиники", "🏥 Найти клинику"}))
 async def request_location(message: Message):
     """Запросить геолокацию для поиска клиник"""
     await message.answer(

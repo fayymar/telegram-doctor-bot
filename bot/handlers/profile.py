@@ -1,9 +1,8 @@
 from datetime import datetime
 from aiogram import Router, F
 from aiogram.types import (
-    Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardRemove,
+    Message,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
 )
 from aiogram.fsm.context import FSMContext
 
@@ -92,45 +91,68 @@ HEREDITARY_OPTIONS = [
 ALLERGY_OPTIONS = [
     "Пенициллин/антибиотики", "Аспирин/НПВП", "Сульфаниламиды", "Анестетики",
 ]
-_SMOKING_CODE = {"no": "🚭 Не курю", "yes": "🚬 Курю", "quit": "✅ Бросил(а)"}
+_SMOKING_BUTTON_MAP = {
+    "🚭 Не курю": "no",
+    "🚬 Курю": "yes",
+    "✅ Бросил(а)": "quit",
+}
 
 
-def _build_toggle_keyboard(
-    options: list, selected: list, prefix: str, none_label: str
-) -> InlineKeyboardMarkup:
-    """Inline-клавиатура с toggle. callback_data = 'prefix:index' (max 64 байта)."""
+def build_chronic_reply_keyboard(selected: list) -> ReplyKeyboardMarkup:
     buttons = []
-    for i, opt in enumerate(options):
-        label = f"✅ {opt}" if opt in selected else opt
-        buttons.append([InlineKeyboardButton(text=label, callback_data=f"{prefix}:{i}")])
+    for i in range(0, len(CHRONIC_OPTIONS), 2):
+        row = []
+        for opt in CHRONIC_OPTIONS[i:i + 2]:
+            label = f"✅ {opt}" if opt in selected else opt
+            row.append(KeyboardButton(text=label))
+        buttons.append(row)
     buttons.append([
-        InlineKeyboardButton(text=none_label, callback_data=f"{prefix}:none"),
-        InlineKeyboardButton(text="Готово ➡️", callback_data=f"{prefix}:done"),
+        KeyboardButton(text="🚫 Ничего из этого"),
+        KeyboardButton(text="➡️ Готово"),
     ])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
-def _build_allergy_keyboard(selected: list) -> InlineKeyboardMarkup:
+def build_hereditary_reply_keyboard(selected: list) -> ReplyKeyboardMarkup:
     buttons = []
-    for i, opt in enumerate(ALLERGY_OPTIONS):
-        label = f"✅ {opt}" if opt in selected else opt
-        buttons.append([InlineKeyboardButton(text=label, callback_data=f"alr:{i}")])
+    for i in range(0, len(HEREDITARY_OPTIONS), 2):
+        row = []
+        for opt in HEREDITARY_OPTIONS[i:i + 2]:
+            label = f"✅ {opt}" if opt in selected else opt
+            row.append(KeyboardButton(text=label))
+        buttons.append(row)
     buttons.append([
-        InlineKeyboardButton(text="Аллергий нет", callback_data="alr:none"),
-        InlineKeyboardButton(text="Готово ➡️", callback_data="alr:done"),
+        KeyboardButton(text="🚫 Ничего из этого"),
+        KeyboardButton(text="➡️ Готово"),
     ])
-    buttons.append([
-        InlineKeyboardButton(text="✏️ Написать своё", callback_data="alr:custom"),
-    ])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
-def _build_smoking_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🚭 Не курю", callback_data="smk:no"),
-        InlineKeyboardButton(text="🚬 Курю", callback_data="smk:yes"),
-        InlineKeyboardButton(text="✅ Бросил(а)", callback_data="smk:quit"),
-    ]])
+def build_allergy_reply_keyboard(selected: list) -> ReplyKeyboardMarkup:
+    buttons = []
+    for i in range(0, len(ALLERGY_OPTIONS), 2):
+        row = []
+        for opt in ALLERGY_OPTIONS[i:i + 2]:
+            label = f"✅ {opt}" if opt in selected else opt
+            row.append(KeyboardButton(text=label))
+        buttons.append(row)
+    buttons.append([
+        KeyboardButton(text="Аллергий нет"),
+        KeyboardButton(text="✏️ Написать своё"),
+    ])
+    buttons.append([KeyboardButton(text="➡️ Готово")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def build_smoking_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[
+            KeyboardButton(text="🚭 Не курю"),
+            KeyboardButton(text="🚬 Курю"),
+            KeyboardButton(text="✅ Бросил(а)"),
+        ]],
+        resize_keyboard=True,
+    )
 
 
 def _upsert_profile_with_fallback(profile_data: dict):
@@ -297,14 +319,11 @@ async def show_profile(message: Message):
         await message.answer("❌ Ошибка при загрузке профиля")
 
 
-@router.message(F.text == "🔙 В главное меню")
+@router.message(F.text == "🔙 Главное меню")
 async def back_to_main_from_profile(message: Message, state: FSMContext):
     """Возврат в главное меню из профиля"""
     await state.clear()
-    await message.answer(
-        "Главное меню",
-        reply_markup=get_main_menu()
-    )
+    await message.answer("Главное меню", reply_markup=get_main_menu())
 
 
 @router.message(F.text == "📊 Показать ИМТ")
@@ -566,134 +585,159 @@ async def process_weight(message: Message, state: FSMContext):
     if not is_valid:
         await message.answer(error_message)
         return
-
-    await state.update_data(weight=weight, selected_chronic=[])
+    await state.update_data(weight=weight)
     await message.answer(f"✅ Вес: {weight} кг", reply_markup=ReplyKeyboardRemove())
+    await _send_chronic_step(message, state)
+
+
+# =========================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ — запуск каждого шага анамнеза
+# =========================================================
+
+async def _send_chronic_step(message: Message, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected_chronic") or []
+    await state.set_state(Registration.waiting_for_chronic)
     await message.answer(
         "📋 *Медицинская история (шаг 1 из 4)*\n\n"
-        "Есть ли у вас хронические заболевания?\nВыберите все подходящие:",
-        reply_markup=_build_toggle_keyboard(CHRONIC_OPTIONS, [], "chr", "Ничего из этого"),
+        "Есть ли у вас хронические заболевания?\n"
+        "Нажимайте кнопки для выбора/отмены:",
+        reply_markup=build_chronic_reply_keyboard(selected),
         parse_mode="Markdown",
     )
-    await state.set_state(Registration.waiting_for_chronic)
+
+
+async def _send_hereditary_step(message: Message, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected_hereditary") or []
+    await state.set_state(Registration.waiting_for_hereditary)
+    await message.answer(
+        "📋 *Медицинская история (шаг 2 из 4)*\n\n"
+        "Есть ли у ваших близких родственников эти заболевания?\n"
+        "Нажимайте кнопки для выбора/отмены:",
+        reply_markup=build_hereditary_reply_keyboard(selected),
+        parse_mode="Markdown",
+    )
+
+
+async def _send_allergy_step(message: Message, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("selected_allergies") or []
+    await state.set_state(Registration.waiting_for_allergies)
+    await message.answer(
+        "📋 *Медицинская история (шаг 3 из 4)*\n\n"
+        "Есть ли у вас аллергия на лекарства?\n"
+        "Нажимайте кнопки для выбора/отмены:",
+        reply_markup=build_allergy_reply_keyboard(selected),
+        parse_mode="Markdown",
+    )
+
+
+async def _send_smoking_step(message: Message, state: FSMContext):
+    await state.set_state(Registration.waiting_for_smoking)
+    await message.answer(
+        "📋 *Медицинская история (шаг 4 из 4)*\n\nВы курите?",
+        reply_markup=build_smoking_reply_keyboard(),
+        parse_mode="Markdown",
+    )
 
 
 # =========================================================
-# ЭТАПЫ 7-10: АНАМНЕЗ — INLINE KEYBOARD CALLBACKS
+# ЭТАПЫ 7-10: АНАМНЕЗ — REPLY KEYBOARD С TOGGLE
 # =========================================================
 
-@router.callback_query(Registration.waiting_for_chronic, F.data.startswith("chr:"))
-async def handle_chronic_callback(callback: CallbackQuery, state: FSMContext):
-    action = callback.data[4:]
+@router.message(Registration.waiting_for_chronic, F.text)
+async def handle_chronic_input(message: Message, state: FSMContext):
+    text = message.text.strip()
     data = await state.get_data()
     selected = list(data.get("selected_chronic") or [])
 
-    if action in ("done", "none"):
-        if action == "none":
-            selected = []
+    if text == "➡️ Готово":
         await state.update_data(selected_chronic=selected)
-        summary = ", ".join(selected) if selected else "нет"
-        await callback.message.edit_text(f"✅ Хронические заболевания: {summary}")
-        await callback.answer()
-        await state.update_data(selected_hereditary=[])
-        await state.set_state(Registration.waiting_for_hereditary)
-        await callback.message.answer(
-            "📋 *Медицинская история (шаг 2 из 4)*\n\n"
-            "Есть ли у ваших близких родственников эти заболевания?",
-            reply_markup=_build_toggle_keyboard(HEREDITARY_OPTIONS, [], "her", "Ничего из этого"),
-            parse_mode="Markdown",
-        )
+        await _send_hereditary_step(message, state)
+        return
+    if text == "🚫 Ничего из этого":
+        await state.update_data(selected_chronic=[])
+        await _send_hereditary_step(message, state)
         return
 
-    try:
-        idx = int(action)
-        opt = CHRONIC_OPTIONS[idx]
-        if opt in selected:
-            selected.remove(opt)
+    clean = text[2:] if text.startswith("✅ ") else text
+    if clean in CHRONIC_OPTIONS:
+        if clean in selected:
+            selected.remove(clean)
         else:
-            selected.append(opt)
+            selected.append(clean)
         await state.update_data(selected_chronic=selected)
-        await callback.message.edit_reply_markup(
-            reply_markup=_build_toggle_keyboard(CHRONIC_OPTIONS, selected, "chr", "Ничего из этого")
+        await message.answer(
+            f"Выбрано: {', '.join(selected) if selected else 'пусто'}\n"
+            "Продолжайте или нажмите «Готово»:",
+            reply_markup=build_chronic_reply_keyboard(selected),
         )
-    except (ValueError, IndexError):
-        pass
-    await callback.answer()
 
 
-@router.callback_query(Registration.waiting_for_hereditary, F.data.startswith("her:"))
-async def handle_hereditary_callback(callback: CallbackQuery, state: FSMContext):
-    action = callback.data[4:]
+@router.message(Registration.waiting_for_hereditary, F.text)
+async def handle_hereditary_input(message: Message, state: FSMContext):
+    text = message.text.strip()
     data = await state.get_data()
     selected = list(data.get("selected_hereditary") or [])
 
-    if action in ("done", "none"):
-        if action == "none":
-            selected = []
+    if text == "➡️ Готово":
         await state.update_data(selected_hereditary=selected)
-        summary = ", ".join(selected) if selected else "нет"
-        await callback.message.edit_text(f"✅ Наследственность: {summary}")
-        await callback.answer()
-        await state.update_data(selected_allergies=[])
-        await state.set_state(Registration.waiting_for_allergies)
-        await callback.message.answer(
-            "📋 *Медицинская история (шаг 3 из 4)*\n\n"
-            "Есть ли у вас аллергия на лекарства?",
-            reply_markup=_build_allergy_keyboard([]),
-            parse_mode="Markdown",
-        )
+        await _send_allergy_step(message, state)
+        return
+    if text == "🚫 Ничего из этого":
+        await state.update_data(selected_hereditary=[])
+        await _send_allergy_step(message, state)
         return
 
-    try:
-        idx = int(action)
-        opt = HEREDITARY_OPTIONS[idx]
-        if opt in selected:
-            selected.remove(opt)
+    clean = text[2:] if text.startswith("✅ ") else text
+    if clean in HEREDITARY_OPTIONS:
+        if clean in selected:
+            selected.remove(clean)
         else:
-            selected.append(opt)
+            selected.append(clean)
         await state.update_data(selected_hereditary=selected)
-        await callback.message.edit_reply_markup(
-            reply_markup=_build_toggle_keyboard(HEREDITARY_OPTIONS, selected, "her", "Ничего из этого")
+        await message.answer(
+            f"Выбрано: {', '.join(selected) if selected else 'пусто'}\n"
+            "Продолжайте или нажмите «Готово»:",
+            reply_markup=build_hereditary_reply_keyboard(selected),
         )
-    except (ValueError, IndexError):
-        pass
-    await callback.answer()
 
 
-@router.callback_query(Registration.waiting_for_allergies, F.data.startswith("alr:"))
-async def handle_allergy_callback(callback: CallbackQuery, state: FSMContext):
-    action = callback.data[4:]
+@router.message(Registration.waiting_for_allergies, F.text)
+async def handle_allergy_input(message: Message, state: FSMContext):
+    text = message.text.strip()
     data = await state.get_data()
     selected = list(data.get("selected_allergies") or [])
 
-    if action == "custom":
-        await callback.message.edit_text("✏️ Напишите, на какие лекарства у вас аллергия:")
+    if text == "➡️ Готово":
+        await state.update_data(selected_allergies=selected)
+        await _send_smoking_step(message, state)
+        return
+    if text == "Аллергий нет":
+        await state.update_data(selected_allergies=[])
+        await _send_smoking_step(message, state)
+        return
+    if text == "✏️ Написать своё":
         await state.set_state(Registration.waiting_for_allergies_text)
-        await callback.answer()
+        await message.answer(
+            "✏️ Напишите, на какие лекарства у вас аллергия:",
+            reply_markup=ReplyKeyboardRemove(),
+        )
         return
 
-    if action in ("done", "none"):
-        if action == "none":
-            selected = []
-        await state.update_data(selected_allergies=selected)
-        summary = ", ".join(selected) if selected else "нет"
-        await callback.message.edit_text(f"✅ Аллергии на лекарства: {summary}")
-        await callback.answer()
-        await _send_smoking_step(callback.message, state)
-        return
-
-    try:
-        idx = int(action)
-        opt = ALLERGY_OPTIONS[idx]
-        if opt in selected:
-            selected.remove(opt)
+    clean = text[2:] if text.startswith("✅ ") else text
+    if clean in ALLERGY_OPTIONS:
+        if clean in selected:
+            selected.remove(clean)
         else:
-            selected.append(opt)
+            selected.append(clean)
         await state.update_data(selected_allergies=selected)
-        await callback.message.edit_reply_markup(reply_markup=_build_allergy_keyboard(selected))
-    except (ValueError, IndexError):
-        pass
-    await callback.answer()
+        await message.answer(
+            f"Выбрано: {', '.join(selected) if selected else 'пусто'}\n"
+            "Продолжайте или нажмите «Готово»:",
+            reply_markup=build_allergy_reply_keyboard(selected),
+        )
 
 
 @router.message(Registration.waiting_for_allergies_text, F.text)
@@ -702,34 +746,49 @@ async def process_allergy_text(message: Message, state: FSMContext):
     await _send_smoking_step(message, state)
 
 
-async def _send_smoking_step(trigger, state: FSMContext):
-    await state.set_state(Registration.waiting_for_smoking)
-    await trigger.answer(
-        "📋 *Медицинская история (шаг 4 из 4)*\n\nВы курите?",
-        reply_markup=_build_smoking_keyboard(),
-        parse_mode="Markdown",
-    )
-
-
-@router.callback_query(Registration.waiting_for_smoking, F.data.startswith("smk:"))
-async def handle_smoking_callback(callback: CallbackQuery, state: FSMContext):
-    smoking_value = callback.data[4:]  # "no", "yes", "quit"
-    smoking_label = _SMOKING_CODE.get(smoking_value, "—")
-
-    await callback.message.edit_text(f"✅ Курение: {smoking_label}")
-    await callback.answer()
-
+@router.message(Registration.waiting_for_smoking, F.text.in_(set(_SMOKING_BUTTON_MAP.keys())))
+async def process_smoking(message: Message, state: FSMContext):
+    smoking_value = _SMOKING_BUTTON_MAP[message.text]
     data = await state.get_data()
-    lang = data.get("language", "ru")
-    now_iso = datetime.now().isoformat()
     chronic_list = data.get("selected_chronic") or []
     hereditary_list = data.get("selected_hereditary") or []
     allergies_str = ", ".join(data.get("selected_allergies") or [])
 
+    await message.answer(f"✅ Курение сохранено.", reply_markup=ReplyKeyboardRemove())
+
+    is_update = data.get("is_anamnesis_update", False)
+
+    if is_update:
+        try:
+            supabase_client.table("user_profiles").update({
+                "chronic_diseases": chronic_list,
+                "hereditary": hereditary_list,
+                "drug_allergies": allergies_str,
+                "smoking": smoking_value,
+                "updated_at": datetime.now().isoformat(),
+            }).eq("user_id", message.from_user.id).execute()
+            logger.info("Anamnesis updated | user_id=%s", message.from_user.id)
+            await message.answer(
+                "✅ *Медицинская история обновлена!*\n\n"
+                "AI-диагностика будет учитывать обновлённые данные.",
+                reply_markup=get_main_menu(),
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.exception("Error updating anamnesis | user_id=%s", message.from_user.id)
+            await message.answer(
+                f"❌ Ошибка: {str(e)[:200]}",
+                reply_markup=get_main_menu(),
+            )
+        await state.clear()
+        return
+
+    # Полное сохранение профиля (регистрация)
+    lang = data.get("language", "ru")
     try:
         profile_data = {
-            "user_id": callback.from_user.id,
-            "username": callback.from_user.username,
+            "user_id": message.from_user.id,
+            "username": message.from_user.username,
             "full_name": data["full_name"],
             "phone": data["phone"],
             "birthdate": data["birthdate"],
@@ -737,7 +796,7 @@ async def handle_smoking_callback(callback: CallbackQuery, state: FSMContext):
             "height": data["height"],
             "weight": data["weight"],
             "language": lang,
-            "updated_at": now_iso,
+            "updated_at": datetime.now().isoformat(),
             "chronic_diseases": chronic_list,
             "hereditary": hereditary_list,
             "drug_allergies": allergies_str,
@@ -746,38 +805,60 @@ async def handle_smoking_callback(callback: CallbackQuery, state: FSMContext):
         _upsert_profile_with_fallback(profile_data)
         logger.info(
             "Full profile + anamnesis saved | user_id=%s | chronic=%s | hereditary=%s | allergies=%s | smoking=%s",
-            callback.from_user.id, chronic_list, hereditary_list, allergies_str, smoking_value,
+            message.from_user.id, chronic_list, hereditary_list, allergies_str, smoking_value,
         )
-
-        await callback.message.answer(
+        await message.answer(
             "🎉 *Профиль и медицинская история сохранены!*\n\n"
             "Теперь AI-диагностика будет учитывать ваши данные для более точных рекомендаций.",
             reply_markup=get_main_menu(),
             parse_mode="Markdown",
         )
-        await callback.message.answer(
+        await message.answer(
             "✅ Профиль сохранён! Вы можете просматривать и редактировать его "
             "в приложении СимптоМед (кнопка внизу экрана)."
         )
         try:
-            await set_webapp_menu_button(callback.bot, callback.message.chat.id)
+            await set_webapp_menu_button(message.bot, message.chat.id)
         except Exception as menu_err:
             logger.warning("Failed to set menu button: %s", menu_err)
         await state.clear()
-
     except Exception as e:
-        logger.exception("Ошибка при сохранении профиля user_id=%s", callback.from_user.id)
-        await callback.message.answer(
+        logger.exception("Ошибка при сохранении профиля user_id=%s", message.from_user.id)
+        await message.answer(
             f"❌ Ошибка при сохранении профиля:\n{str(e)[:500]}\n\nПопробуйте ещё раз: /start"
         )
         await state.clear()
 
 
 # =========================================================
+# ОБНОВЛЕНИЕ АНАМНЕЗА (из профиля)
+# =========================================================
+
+@router.message(F.text == "📋 Обновить медицинскую историю")
+async def update_anamnesis_start(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    pre = {"is_anamnesis_update": True, "selected_chronic": [], "selected_hereditary": [], "selected_allergies": []}
+    try:
+        result = supabase_client.table("user_profiles").select(
+            "chronic_diseases, hereditary, drug_allergies, smoking"
+        ).eq("user_id", user_id).limit(1).execute()
+        if result.data:
+            p = result.data[0]
+            pre["selected_chronic"] = p.get("chronic_diseases") or []
+            pre["selected_hereditary"] = p.get("hereditary") or []
+            allergy_raw = p.get("drug_allergies") or ""
+            pre["selected_allergies"] = [allergy_raw] if allergy_raw else []
+    except Exception as e:
+        logger.error(f"Error loading anamnesis for user {user_id}: {e}")
+    await state.set_data(pre)
+    await _send_chronic_step(message, state)
+
+
+# =========================================================
 # РЕДАКТИРОВАНИЕ ПРОФИЛЯ
 # =========================================================
 
-@router.message(F.text == "✏️ Изменить данные")
+@router.message(F.text == "✏️ Изменить данные профиля")
 async def edit_profile_menu(message: Message, state: FSMContext):
     """Меню редактирования профиля"""
     await message.answer(

@@ -155,7 +155,7 @@ CATEGORY_SPECIALISTS = {
 
 # ============ ГЛАВНОЕ МЕНЮ СПЕЦИАЛИСТОВ ============
 
-@router.message(F.text == "🔍 Найти специалиста")
+@router.message(F.text.in_({"🔍 Найти специалиста", "👨‍⚕️ Найти специалиста"}))
 async def show_specialist_categories(message: Message, state: FSMContext):
     """Показывает категории специалистов"""
     await state.clear()

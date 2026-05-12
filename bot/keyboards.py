@@ -15,8 +15,8 @@ def get_main_menu() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🩺 Новая консультация")],
         [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="📋 История")],
         [KeyboardButton(text="💊 Лекарства"), KeyboardButton(text="📓 Дневник")],
-        [KeyboardButton(text="🗺 Найти клиники"), KeyboardButton(text="🔍 Найти специалиста")],
-        [KeyboardButton(text="💾 Экспорт анамнеза"), KeyboardButton(text="ℹ️ Помощь")],
+        [KeyboardButton(text="🏥 Клиники и специалисты")],
+        [KeyboardButton(text="💾 Экспорт анамнеза"), KeyboardButton(text="❓ F.A.Q.")],
         [KeyboardButton(text="🌐 Открыть приложение", web_app=WebAppInfo(url="https://sympto-med-app.vercel.app"))]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
@@ -57,9 +57,18 @@ def get_cancel_keyboard() -> ReplyKeyboardMarkup:
 def get_profile_menu() -> ReplyKeyboardMarkup:
     """Меню профиля (ОБЫЧНЫЕ КНОПКИ)"""
     keyboard = [
-        [KeyboardButton(text="📊 Показать ИМТ")],
-        [KeyboardButton(text="✏️ Изменить данные")],
-        [KeyboardButton(text="🔙 В главное меню")]
+        [KeyboardButton(text="✏️ Изменить данные профиля")],
+        [KeyboardButton(text="📋 Обновить медицинскую историю")],
+        [KeyboardButton(text="🔙 Главное меню")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def get_clinics_specialists_submenu() -> ReplyKeyboardMarkup:
+    """Подменю клиник и специалистов"""
+    keyboard = [
+        [KeyboardButton(text="🏥 Найти клинику"), KeyboardButton(text="👨‍⚕️ Найти специалиста")],
+        [KeyboardButton(text="🔙 Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
