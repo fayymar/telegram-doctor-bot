@@ -224,7 +224,10 @@ async def process_language_choice(message: Message, state: FSMContext):
     """Обработка выбора языка"""
     lang = "ru" if message.text == "🇷🇺 Русский" else "uz"
 
-    await state.update_data(language=lang)
+    await state.update_data(
+        language=lang,
+        username=message.from_user.username or "",
+    )
 
     welcome_texts = {
         "ru": (
