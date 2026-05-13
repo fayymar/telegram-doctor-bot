@@ -171,8 +171,8 @@ async def api_consultation_start(request: web.Request) -> web.Response:
 
     # Получаем профиль пользователя из Supabase
     try:
-        resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", user_id).single().execute())
-        user_profile = resp.data or {}
+        resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", int(user_id)).limit(1).execute())
+        user_profile = (resp.data[0] if resp.data else {})
     except Exception:
         user_profile = {}
 
@@ -328,8 +328,8 @@ async def api_consultation_result(request: web.Request) -> web.Response:
         user_profile = session.get("user_profile") or {}
         if not user_profile:
             try:
-                resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", session["user_id"]).single().execute())
-                user_profile = resp.data or {}
+                resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", int(session["user_id"])).limit(1).execute())
+                user_profile = (resp.data[0] if resp.data else {})
             except Exception:
                 pass
 

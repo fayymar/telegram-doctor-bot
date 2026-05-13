@@ -457,12 +457,9 @@ async def back_to_weight(message: Message, state: FSMContext):
 async def back_to_chronic(message: Message, state: FSMContext):
     """Назад к хроническим заболеваниям."""
     data = await state.get_data()
-    selected = data.get("chronic_diseases", [])
+    selected = data.get("selected_chronic", [])
     await state.set_state(Registration.waiting_for_chronic)
-    await message.answer(
-        "◀️ Вернулись к шагу 1 из 4 (анамнез)\n\nВыберите хронические заболевания:",
-        reply_markup=build_chronic_reply_keyboard(selected)
-    )
+    await _send_chronic_step(message, state)
 
 
 @router.message(Registration.waiting_for_allergies, F.text == BACK_TEXT)
@@ -470,12 +467,9 @@ async def back_to_chronic(message: Message, state: FSMContext):
 async def back_to_hereditary(message: Message, state: FSMContext):
     """Назад к наследственным заболеваниям."""
     data = await state.get_data()
-    selected = data.get("hereditary", [])
+    selected = data.get("selected_hereditary", [])
     await state.set_state(Registration.waiting_for_hereditary)
-    await message.answer(
-        "◀️ Вернулись к шагу 2 из 4 (анамнез)\n\nВыберите наследственные заболевания:",
-        reply_markup=build_hereditary_reply_keyboard(selected)
-    )
+    await _send_hereditary_step(message, state)
 
 
 
@@ -527,12 +521,9 @@ async def _save_and_finish_registration(message: Message, state: FSMContext):
 async def back_to_allergies(message: Message, state: FSMContext):
     """Назад к аллергиям."""
     data = await state.get_data()
-    selected = data.get("allergies_selected", [])
+    selected = data.get("selected_allergies", [])
     await state.set_state(Registration.waiting_for_allergies)
-    await message.answer(
-        "◀️ Вернулись к шагу 3 из 4 (анамнез)\n\nЕсть ли аллергия на лекарства?",
-        reply_markup=build_allergy_reply_keyboard(selected)
-    )
+    await _send_allergy_step(message, state)
 
 
 # Отмена регистрации из любого шага
