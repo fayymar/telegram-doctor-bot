@@ -156,8 +156,9 @@ async def clinics_specialists_menu(message: Message):
     )
 
 
-@router.message(F.text == "🔙 Назад")
+@router.message(F.text.in_({"🔙 Назад", "🔙 В главное меню", "В главное меню", "🏠 Главное меню", "Главное меню"}))
 async def back_to_main(message: Message, state: FSMContext):
+    """Универсальный обработчик для всех кнопок возврата в главное меню."""
     await state.clear()
     await message.answer("Главное меню", reply_markup=get_main_menu())
 
