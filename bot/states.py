@@ -10,6 +10,7 @@ class Registration(StatesGroup):
     waiting_for_gender = State()
     waiting_for_height = State()
     waiting_for_weight = State()
+    waiting_for_anamnesis_consent = State()  # Согласие на анамнез
     # Анамнез (медицинская история)
     waiting_for_chronic = State()
     waiting_for_hereditary = State()

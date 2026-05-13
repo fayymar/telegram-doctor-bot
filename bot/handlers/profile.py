@@ -1,5 +1,5 @@
 from datetime import datetime
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.types import (
     Message,
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
@@ -474,6 +474,51 @@ async def back_to_hereditary(message: Message, state: FSMContext):
     )
 
 
+
+async def _save_and_finish_registration(message: Message, state: FSMContext):
+    """Сохраняет профиль и завершает регистрацию (вызывается и при пропуске анамнеза)."""
+    data = await state.get_data()
+    chronic_list = data.get("selected_chronic") or []
+    hereditary_list = data.get("selected_hereditary") or []
+    allergies_str = ", ".join(data.get("selected_allergies") or [])
+    smoking_value = data.get("smoking_value") or data.get("smoking") or "no"
+    lang = data.get("language", "ru")
+    try:
+        profile_data = {
+            "user_id": message.from_user.id,
+            "username": message.from_user.username,
+            "full_name": data.get("full_name", ""),
+            "phone": data.get("phone", ""),
+            "birthdate": data.get("birthdate", ""),
+            "gender": data.get("gender", ""),
+            "height": data.get("height"),
+            "weight": data.get("weight"),
+            "language": lang,
+            "updated_at": datetime.now().isoformat(),
+            "chronic_diseases": chronic_list,
+            "hereditary": hereditary_list,
+            "drug_allergies": allergies_str,
+            "smoking": smoking_value,
+        }
+        _upsert_profile_with_fallback(profile_data)
+        logger.info("Profile saved via _save_and_finish | user_id=%s", message.from_user.id)
+        await message.answer(
+            "🎉 *Профиль сохранён!*\n\n"
+            "Теперь диагностика будет учитывать ваши данные для более точных рекомендаций.",
+            reply_markup=get_main_menu(),
+            parse_mode="Markdown",
+        )
+        try:
+            await set_webapp_menu_button(message.bot, message.chat.id)
+        except Exception as menu_err:
+            logger.warning("Failed to set menu button: %s", menu_err)
+    except Exception as e:
+        logger.exception("Error in _save_and_finish | user_id=%s", message.from_user.id)
+        await message.answer(f"❌ Ошибка при сохранении: {str(e)[:300]}\n\nПопробуйте /start")
+    finally:
+        await state.clear()
+
+
 @router.message(Registration.waiting_for_smoking, F.text == BACK_TEXT)
 async def back_to_allergies(message: Message, state: FSMContext):
     """Назад к аллергиям."""
@@ -719,12 +764,62 @@ async def process_weight(message: Message, state: FSMContext):
         return
     await state.update_data(weight=weight)
     await message.answer(f"✅ Вес: {weight} кг", reply_markup=ReplyKeyboardRemove())
-    await _send_chronic_step(message, state)
+    # Спрашиваем согласие на анамнез
+    await state.set_state(Registration.waiting_for_anamnesis_consent)
+    await message.answer(
+        "📋 *Медицинская история*\n\n"
+        "Заполнение медицинской истории поможет точнее подобрать специалиста.\n\n"
+        "Займёт около 1 минуты. Вы можете пропустить этот шаг.",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="✅ Заполнить"), KeyboardButton(text="⏭️ Пропустить")],
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+    )
 
 
 # =========================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ — запуск каждого шага анамнеза
 # =========================================================
+
+
+# ─── Helpers для удаления сообщений ────────────────────────────────────────
+
+async def _try_delete(bot: Bot, message: Message):
+    """Безопасно удаляет сообщение пользователя."""
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        pass
+
+
+async def _try_delete_by_id(bot: Bot, chat_id: int, message_id: int):
+    """Безопасно удаляет сообщение по ID."""
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass
+
+
+
+
+@router.message(Registration.waiting_for_anamnesis_consent, F.text)
+async def handle_anamnesis_consent(message: Message, state: FSMContext):
+    """Обработка согласия на заполнение анамнеза."""
+    text = message.text.strip()
+    if text == "✅ Заполнить":
+        await _send_chronic_step(message, state)
+    else:
+        # Пропускаем анамнез — сразу сохраняем профиль
+        await state.update_data(
+            selected_chronic=[], selected_hereditary=[],
+            selected_allergies=[], smoking="no",
+        )
+        await _save_and_finish_registration(message, state)
+
 
 async def _send_chronic_step(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -779,18 +874,24 @@ async def _send_smoking_step(message: Message, state: FSMContext):
 # =========================================================
 
 @router.message(Registration.waiting_for_chronic, F.text)
-async def handle_chronic_input(message: Message, state: FSMContext):
+async def handle_chronic_input(message: Message, state: FSMContext, bot: Bot):
     text = message.text.strip()
     data = await state.get_data()
     selected = list(data.get("selected_chronic") or [])
 
     if text == "➡️ Готово":
+        await _try_delete(bot, message)
         await state.update_data(selected_chronic=selected)
         await _send_hereditary_step(message, state)
         return
     if text == "🚫 Ничего из этого":
+        await _try_delete(bot, message)
         await state.update_data(selected_chronic=[])
         await _send_hereditary_step(message, state)
+        return
+    if text == "◀️ Назад":
+        await _try_delete(bot, message)
+        await back_to_weight(message, state)
         return
 
     clean = text[2:] if text.startswith("✅ ") else text
@@ -800,24 +901,35 @@ async def handle_chronic_input(message: Message, state: FSMContext):
         else:
             selected.append(clean)
         await state.update_data(selected_chronic=selected)
-        await message.answer(
-            f"Выбрано: {', '.join(selected) if selected else 'пусто'}\n"
-            "Продолжайте или нажмите «Готово»:",
+        # Delete user message + previous toggle message to avoid spam
+        await _try_delete(bot, message)
+        prev_id = data.get("toggle_msg_id")
+        if prev_id:
+            await _try_delete_by_id(bot, message.chat.id, prev_id)
+        summary = ", ".join(selected) if selected else "пусто"
+        sent = await message.answer(
+            f"📋 *Медицинская история (шаг 1 из 4)*\n\n"
+            f"Выбрано: {summary}\n"
+            f"Продолжайте выбирать или нажмите «Готово»:",
             reply_markup=build_chronic_reply_keyboard(selected),
+            parse_mode="Markdown",
         )
+        await state.update_data(toggle_msg_id=sent.message_id)
 
 
 @router.message(Registration.waiting_for_hereditary, F.text)
-async def handle_hereditary_input(message: Message, state: FSMContext):
+async def handle_hereditary_input(message: Message, state: FSMContext, bot: Bot):
     text = message.text.strip()
     data = await state.get_data()
     selected = list(data.get("selected_hereditary") or [])
 
     if text == "➡️ Готово":
+        await _try_delete(bot, message)
         await state.update_data(selected_hereditary=selected)
         await _send_allergy_step(message, state)
         return
     if text == "🚫 Ничего из этого":
+        await _try_delete(bot, message)
         await state.update_data(selected_hereditary=[])
         await _send_allergy_step(message, state)
         return
@@ -829,28 +941,39 @@ async def handle_hereditary_input(message: Message, state: FSMContext):
         else:
             selected.append(clean)
         await state.update_data(selected_hereditary=selected)
-        await message.answer(
-            f"Выбрано: {', '.join(selected) if selected else 'пусто'}\n"
-            "Продолжайте или нажмите «Готово»:",
+        await _try_delete(bot, message)
+        prev_id = data.get("toggle_msg_id")
+        if prev_id:
+            await _try_delete_by_id(bot, message.chat.id, prev_id)
+        summary = ", ".join(selected) if selected else "пусто"
+        sent = await message.answer(
+            f"📋 *Медицинская история (шаг 2 из 4)*\n\n"
+            f"Выбрано: {summary}\n"
+            "Продолжайте выбирать или нажмите «Готово»:",
             reply_markup=build_hereditary_reply_keyboard(selected),
+            parse_mode="Markdown",
         )
+        await state.update_data(toggle_msg_id=sent.message_id)
 
 
 @router.message(Registration.waiting_for_allergies, F.text)
-async def handle_allergy_input(message: Message, state: FSMContext):
+async def handle_allergy_input(message: Message, state: FSMContext, bot: Bot):
     text = message.text.strip()
     data = await state.get_data()
     selected = list(data.get("selected_allergies") or [])
 
     if text == "➡️ Готово":
+        await _try_delete(bot, message)
         await state.update_data(selected_allergies=selected)
         await _send_smoking_step(message, state)
         return
     if text == "Аллергий нет":
+        await _try_delete(bot, message)
         await state.update_data(selected_allergies=[])
         await _send_smoking_step(message, state)
         return
     if text == "✏️ Написать своё":
+        await _try_delete(bot, message)
         await state.set_state(Registration.waiting_for_allergies_text)
         await message.answer(
             "✏️ Напишите, на какие лекарства у вас аллергия:",
@@ -886,8 +1009,8 @@ async def process_smoking(message: Message, state: FSMContext):
     hereditary_list = data.get("selected_hereditary") or []
     allergies_str = ", ".join(data.get("selected_allergies") or [])
 
-    await message.answer(f"✅ Курение сохранено.", reply_markup=ReplyKeyboardRemove())
-
+    await message.answer("✅", reply_markup=ReplyKeyboardRemove())
+    await state.update_data(smoking_value=smoking_value)
     is_update = data.get("is_anamnesis_update", False)
 
     if is_update:
@@ -902,7 +1025,7 @@ async def process_smoking(message: Message, state: FSMContext):
             logger.info("Anamnesis updated | user_id=%s", message.from_user.id)
             await message.answer(
                 "✅ *Медицинская история обновлена!*\n\n"
-                "AI-диагностика будет учитывать обновлённые данные.",
+                "Диагностика будет учитывать обновлённые данные.",
                 reply_markup=get_main_menu(),
                 parse_mode="Markdown",
             )
@@ -941,7 +1064,7 @@ async def process_smoking(message: Message, state: FSMContext):
         )
         await message.answer(
             "🎉 *Профиль и медицинская история сохранены!*\n\n"
-            "Теперь AI-диагностика будет учитывать ваши данные для более точных рекомендаций.",
+            "Теперь диагностика будет учитывать ваши данные для более точных рекомендаций.",
             reply_markup=get_main_menu(),
             parse_mode="Markdown",
         )
