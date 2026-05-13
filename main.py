@@ -59,8 +59,52 @@ dp.include_router(fallback.router)    # Fallback для зависших FSM (В
 # Хранилище сессий в памяти (для MVP)
 consultation_sessions: dict = {}
 
+# ── Rate limiting (in-memory, resets on redeploy) ──────────────────────────
+from collections import defaultdict
+import time as _time
+
+_rate_counters: dict = defaultdict(list)  # ip → [timestamps]
+_RATE_LIMIT = 60       # max requests
+_RATE_WINDOW = 60      # per N seconds
+
+def _is_rate_limited(request: web.Request) -> bool:
+    """Simple IP-based rate limiting. Returns True if request should be blocked."""
+    ip = request.headers.get("X-Forwarded-For", request.remote or "unknown").split(",")[0].strip()
+    now = _time.time()
+    window_start = now - _RATE_WINDOW
+    timestamps = _rate_counters[ip]
+    # Remove old timestamps
+    _rate_counters[ip] = [t for t in timestamps if t > window_start]
+    if len(_rate_counters[ip]) >= _RATE_LIMIT:
+        return True
+    _rate_counters[ip].append(now)
+    return False
+
+
+def _rate_limit_response() -> web.Response:
+    return json_response({"error": "Too many requests. Please slow down."}, status=429)
+
+
+
+
+ALLOWED_ORIGINS = {
+    "https://sympto-med-app.vercel.app",
+    "https://telegram-doctor-bot.onrender.com",
+}
+
+def _get_cors_headers(request: web.Request) -> dict:
+    origin = request.headers.get("Origin", "")
+    allowed = origin if origin in ALLOWED_ORIGINS else "https://sympto-med-app.vercel.app"
+    return {
+        "Access-Control-Allow-Origin": allowed,
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Vary": "Origin",
+    }
+
+# Fallback headers for non-request contexts
 CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": "https://sympto-med-app.vercel.app",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
 }
@@ -100,6 +144,8 @@ async def health_check(request):
 
 async def api_consultation_start(request: web.Request) -> web.Response:
     """POST /api/consultation/start"""
+    if _is_rate_limited(request):
+        return _rate_limit_response()
     try:
         body = await request.json()
     except Exception as e:
@@ -125,7 +171,7 @@ async def api_consultation_start(request: web.Request) -> web.Response:
 
     # Получаем профиль пользователя из Supabase
     try:
-        resp = supabase_client.table("user_profiles").select("*").eq("user_id", user_id).single().execute()
+        resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", user_id).single().execute())
         user_profile = resp.data or {}
     except Exception:
         user_profile = {}
@@ -282,7 +328,7 @@ async def api_consultation_result(request: web.Request) -> web.Response:
         user_profile = session.get("user_profile") or {}
         if not user_profile:
             try:
-                resp = supabase_client.table("user_profiles").select("*").eq("user_id", session["user_id"]).single().execute()
+                resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", session["user_id"]).single().execute())
                 user_profile = resp.data or {}
             except Exception:
                 pass
@@ -297,13 +343,13 @@ async def api_consultation_result(request: web.Request) -> web.Response:
         try:
             specialists_raw = recommendation.get("specialists", [])
             recommended_doctor = specialists_raw[0]["name"] if specialists_raw else "Терапевт"
-            supabase_client.table("consultations").insert({
+            await run_query(lambda: supabase_client.table("consultations").insert({
                 "user_id": session["user_id"],
                 "symptoms": json.dumps({"text": session["symptoms"], "history": [a for a in session["answers"] if a]}, ensure_ascii=False),
                 "questions_answers": json.dumps(all_data, ensure_ascii=False),
                 "recommended_doctor": recommended_doctor,
                 "urgency_level": recommendation.get("urgency", "medium"),
-            }).execute()
+            }).execute())
         except Exception as e:
             logger.error(f"Failed to save consultation to Supabase: {e}", exc_info=True)
 
@@ -463,7 +509,7 @@ async def api_health_heartrate(request: web.Request) -> web.Response:
             record['user_id'] = user_id
 
         # Сохраняем в Supabase таблицу health_metrics
-        supabase_client.table('health_metrics').insert(record).execute()
+        await run_query(lambda: supabase_client.table('health_metrics').insert(record).execute())
 
         # Если есть user_id — отправляем уведомление в Telegram
         if user_id:
