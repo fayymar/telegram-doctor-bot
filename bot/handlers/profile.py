@@ -806,6 +806,16 @@ async def _try_delete_by_id(bot: Bot, chat_id: int, message_id: int):
 
 
 
+@router.message(Registration.waiting_for_anamnesis_consent, F.text == BACK_TEXT)
+async def back_from_consent(message: Message, state: FSMContext):
+    """Назад к вводу веса."""
+    await state.set_state(Registration.waiting_for_weight)
+    await message.answer(
+        "◀️ Вернулись к шагу 6\n\n⚖️ Введите ваш вес в кг:",
+        reply_markup=get_step_keyboard_with_back()
+    )
+
+
 @router.message(Registration.waiting_for_anamnesis_consent, F.text)
 async def handle_anamnesis_consent(message: Message, state: FSMContext):
     """Обработка согласия на заполнение анамнеза."""
