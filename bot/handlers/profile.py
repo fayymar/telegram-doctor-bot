@@ -832,43 +832,7 @@ async def handle_anamnesis_consent(message: Message, state: FSMContext):
         await _save_and_finish_registration(message, state)
 
 
-async def _send_chronic_step(message: Message, state: FSMContext):
-    data = await state.get_data()
-    selected = data.get("selected_chronic") or []
-    await state.set_state(Registration.waiting_for_chronic)
-    await message.answer(
-        "📋 *Медицинская история (шаг 1 из 4)*\n\n"
-        "Есть ли у вас хронические заболевания?\n"
-        "Нажимайте кнопки для выбора/отмены:",
-        reply_markup=build_chronic_reply_keyboard(selected),
-        parse_mode="Markdown",
-    )
-
-
-async def _send_hereditary_step(message: Message, state: FSMContext):
-    data = await state.get_data()
-    selected = data.get("selected_hereditary") or []
-    await state.set_state(Registration.waiting_for_hereditary)
-    await message.answer(
-        "📋 *Медицинская история (шаг 2 из 4)*\n\n"
-        "Есть ли у ваших близких родственников эти заболевания?\n"
-        "Нажимайте кнопки для выбора/отмены:",
-        reply_markup=build_hereditary_reply_keyboard(selected),
-        parse_mode="Markdown",
-    )
-
-
-async def _send_allergy_step(message: Message, state: FSMContext):
-    data = await state.get_data()
-    selected = data.get("selected_allergies") or []
-    await state.set_state(Registration.waiting_for_allergies)
-    await message.answer(
-        "📋 *Медицинская история (шаг 3 из 4)*\n\n"
-        "Есть ли у вас аллергия на лекарства?\n"
-        "Нажимайте кнопки для выбора/отмены:",
-        reply_markup=build_allergy_reply_keyboard(selected),
-        parse_mode="Markdown",
-    )
+# (старые ReplyKeyboard версии удалены — используются InlineKeyboard выше)
 
 
 async def _send_smoking_step(message: Message, state: FSMContext):

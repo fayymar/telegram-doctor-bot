@@ -21,7 +21,7 @@ from services.consultation_agent import (
     get_patient_history,
     get_recent_health_metrics,
 )
-from database.connection import supabase_client
+from database.connection import supabase_client, run_query
 
 
 # Настройка логирования
@@ -349,8 +349,8 @@ async def api_profile_get(request: web.Request) -> web.Response:
     logger.info(f"Profile GET request: user_id={user_id}")
 
     try:
-        resp = (
-            supabase_client.table("user_profiles")
+        resp = await run_query(
+            lambda: supabase_client.table("user_profiles")
             .select(", ".join(_PROFILE_FIELDS))
             .eq("user_id", int(user_id))
             .limit(1)
@@ -392,7 +392,7 @@ async def api_profile_post(request: web.Request) -> web.Response:
     logger.info(f"Profile POST upsert data: {update_data}")
 
     try:
-        supabase_client.table("user_profiles").upsert(update_data, on_conflict="user_id").execute()
+        await run_query(lambda: supabase_client.table("user_profiles").upsert(update_data, on_conflict="user_id").execute())
         logger.info(f"Profile POST success: user_id={user_id}")
         return json_response({"status": "ok"})
     except Exception as e:
@@ -691,7 +691,7 @@ async def api_health_metrics_post(request: web.Request) -> web.Response:
 
     # Тихое сохранение в Supabase
     try:
-        supabase_client.table('health_metrics').insert(records_to_insert).execute()
+        await run_query(lambda: supabase_client.table('health_metrics').insert(records_to_insert).execute())
     except Exception as e:
         logger.error(f"Health metrics insert error: {e}", exc_info=True)
         return json_response({'error': str(e)}, status=500)
@@ -854,6 +854,40 @@ async def _check_anamnesis_fields():
             )
 
 
+async def api_consultations_get(request: web.Request) -> web.Response:
+    """GET /api/consultations/{user_id} — история консультаций для Mini App."""
+    user_id = request.match_info.get('user_id')
+    try:
+        resp = await run_query(
+            lambda: supabase_client.table('consultations')
+            .select('id, symptoms, recommended_doctor, urgency_level, created_at')
+            .eq('user_id', int(user_id))
+            .order('created_at', desc=True)
+            .limit(20)
+            .execute()
+        )
+        rows = resp.data or []
+        records = []
+        for r in rows:
+            symptoms_raw = r.get('symptoms', '')
+            try:
+                symptoms_parsed = json.loads(symptoms_raw) if symptoms_raw else {}
+                symptoms_text = symptoms_parsed.get('text', symptoms_raw)
+            except Exception:
+                symptoms_text = symptoms_raw
+            records.append({
+                'id': r.get('id'),
+                'symptoms': symptoms_text,
+                'recommended_doctor': r.get('recommended_doctor', ''),
+                'urgency_level': r.get('urgency_level', 'medium'),
+                'created_at': r.get('created_at', ''),
+            })
+        return json_response({'records': records, 'has_data': bool(records)})
+    except Exception as e:
+        logger.error(f'Consultations GET error for {user_id}: {e}', exc_info=True)
+        return json_response({'records': [], 'has_data': False})
+
+
 async def cleanup_stale_sessions():
     """Удаляет сессии консультаций старше 2 часов из памяти."""
     while True:
@@ -923,6 +957,7 @@ async def start_web_server():
         app.router.add_post('/api/consultation/answer', api_consultation_answer)
         app.router.add_post('/api/consultation/duration', api_consultation_duration)
         app.router.add_post('/api/consultation/result', api_consultation_result)
+        app.router.add_get('/api/consultations/{user_id}', api_consultations_get)
         app.router.add_get('/api/profile/{user_id}', api_profile_get)
         app.router.add_post('/api/profile/{user_id}', api_profile_post)
         app.router.add_get('/api/health/heartrate/{user_id}', api_health_heartrate_get)
