@@ -193,57 +193,67 @@ def _format_metrics_for_prompt(metrics: dict) -> str:
 
 def validate_symptoms(symptoms: str, language: str = "ru") -> tuple[bool, str]:
     """
-    Проверяет что пользователь описал симптомы, а не что-то постороннее.
+    Проверяет что пользователь описал реальные симптомы, а не белиберду.
     Возвращает (is_valid, error_message).
     """
     text = symptoms.strip()
 
     if len(text) < 5:
-        if language == "ru":
-            return False, "Опишите симптомы подробнее."
-        return False, "Alomatlarni batafsilroq tasvirlab bering."
+        return (
+            False,
+            "Опишите симптомы подробнее." if language == "ru"
+            else "Alomatlarni batafsilroq tasvirlab bering."
+        )
 
-    # Быстрая блокировка явно несмедицинских запросов (без AI)
-    NON_MEDICAL = [
-        "рецепт", "recipe", "привет", "hello", "hi", "тест", "test",
-        "проверка", "погода", "курс валют", "футбол", "новости",
-    ]
+    # Быстрая блокировка очевидно не-медицинского
+    NON_MEDICAL_EXACT = ["рецепт", "recipe", "привет", "hello", "hi",
+                         "тест", "test", "проверка", "check", "погода"]
     lower = text.lower()
-    for w in NON_MEDICAL:
+    for w in NON_MEDICAL_EXACT:
         if w in lower:
-            if language == "ru":
-                return False, (
-                    "Пожалуйста, опишите симптомы или жалобы на здоровье.\n\n"
-                    "Например: «болит голова» или «кашель 3 дня»."
-                )
-            return False, (
-                "Iltimos, alomatlatingizni tasvirlab bering.\n\n"
+            return (
+                False,
+                "Пожалуйста, опишите симптомы или жалобы на здоровье.\n\n"
+                "Например: «болит голова» или «кашель 3 дня»."
+                if language == "ru"
+                else "Iltimos, alomatlatingizni tasvirlab bering.\n\n"
                 "Masalan: «bosh og\'riydi» yoki «3 kundan beri yo\'tal»."
             )
 
-    # AI проверка для неочевидных случаев
+    # AI проверка: просим назвать конкретный орган или симптом
     prompt = (
-        f"Пользователь написал в медицинский бот: \"{text}\"\n\n"
-        "Это описание симптомов или жалоб на здоровье? Ответь ТОЛЬКО YES или NO.\n"
-        "YES: болит живот, температура, кашель, плохо сплю, тошнит\n"
-        "NO: рецепт пирога, как дела, погода, тест, аааа, любая тема не о здоровье"
-    )
+        f'''Пользователь написал: "{text}"
+
+Выпиши ТОЛЬКО название органа, части тела или медицинского симптома из этого текста.
+Примеры правильных ответов: голова, живот, температура, кашель, спина, горло, сердце.
+
+Если в тексте НЕТ реального органа или медицинского симптома — ответь одним словом: НЕТ
+
+Важно:
+- "яблочный пирог", "стол", "машина", "интернет" — НЕ органы → пиши НЕТ
+- "болит яблочный пирог" → пирог не орган → пиши НЕТ
+- "болит всё" → расплывчато, нет органа → пиши НЕТ
+- "болит голова" → орган найден → пиши голова''')
     try:
         from services.ai_service import call_model
-        response = call_model(prompt, max_tokens=5)
-        if "YES" not in response.upper():
+        response = call_model(prompt, max_tokens=15).strip()
+        is_valid = "НЕТ" not in response.upper() and len(response) > 1
+        if not is_valid:
             if language == "ru":
                 return False, (
-                    "Пожалуйста, опишите симптомы или жалобы на здоровье.\n\n"
-                    "Например: «болит голова» или «кашель 3 дня»."
+                    "Не удалось определить что именно вас беспокоит.\n\n"
+                    "Опишите конкретнее — что болит или что вас беспокоит?\n"
+                    "Например: «болит голова» или «кашель и температура 38»."
                 )
             return False, (
-                "Iltimos, alomatlatingizni tasvirlab bering.\n\n"
-                "Masalan: «bosh og\'riydi» yoki «3 kundan beri yo\'tal»."
+                "Aniq alomatni aniqlab bo\'lmadi.\n\n"
+                "Aniqroq tasvirlab bering — nima og\'riydi?\n"
+                "Masalan: «bosh og\'riydi» yoki «yo\'tal va 38 isitma»."
             )
         return True, ""
     except Exception:
-        return True, ""  # При ошибке AI — пропускаем, не блокируем
+        return True, ""
+
 
 
 def check_red_flags(symptoms_text: str, health_metrics: Optional[dict] = None) -> dict:
