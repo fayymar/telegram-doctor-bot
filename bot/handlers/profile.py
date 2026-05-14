@@ -836,6 +836,7 @@ def _build_chronic_inline(selected: list) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🚫 Ничего", callback_data="chr:NONE"),
         InlineKeyboardButton(text="Далее ➡️",  callback_data="chr:DONE"),
     ])
+    rows.append([InlineKeyboardButton(text="✏️ Другое (написать)", callback_data="chr:CUSTOM")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="chr:BACK")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -849,6 +850,7 @@ def _build_hereditary_inline(selected: list) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🚫 Ничего", callback_data="her:NONE"),
         InlineKeyboardButton(text="Далее ➡️",  callback_data="her:DONE"),
     ])
+    rows.append([InlineKeyboardButton(text="✏️ Другое (написать)", callback_data="her:CUSTOM")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="her:BACK")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -862,6 +864,7 @@ def _build_allergy_inline(selected: list) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🚫 Нет аллергий", callback_data="alr:NONE"),
         InlineKeyboardButton(text="Далее ➡️",        callback_data="alr:DONE"),
     ])
+    rows.append([InlineKeyboardButton(text="✏️ Другое (написать)", callback_data="alr:CUSTOM")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="alr:BACK")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -911,7 +914,7 @@ async def _send_allergy_step(message: Message, state: FSMContext):
     selected = data.get("selected_allergies") or []
     await state.set_state(Registration.waiting_for_allergies)
     sent = await message.answer(
-        "📋 *Медицинская история (3 из 4)*\n\n"
+        "📋 *Медицинская история (3 из 5)*\n\n"
         "Есть ли аллергия на лекарства?\n"
         "_Нажимайте — галочка ставится/снимается:_",
         reply_markup=_build_allergy_inline(selected),
@@ -925,7 +928,7 @@ async def _send_smoking_step(message: Message, state: FSMContext):
     current = data.get("smoking_value", "")
     await state.set_state(Registration.waiting_for_smoking)
     sent = await message.answer(
-        "📋 *Медицинская история (4 из 4)*\n\nВы курите?",
+        "📋 *Медицинская история (5 из 5)*\n\nВы курите?",
         reply_markup=_build_smoking_inline(current),
         parse_mode="Markdown",
     )
@@ -933,6 +936,30 @@ async def _send_smoking_step(message: Message, state: FSMContext):
 
 
 # ── Callbacks: хронические ───────────────────────────────────────────────────
+
+async def _validate_medical_input(text: str) -> tuple[bool, str]:
+    """Проверяет что пользователь ввёл реальное заболевание/аллерген, а не белиберду."""
+    text = text.strip()
+    if len(text) < 2:
+        return False, "Слишком коротко. Введите название заболевания или аллергена."
+    if len(text) > 100:
+        return False, "Слишком длинно. Максимум 100 символов."
+
+    prompt = (
+        f'''Пользователь ввёл в поле медицинской анкеты: "{text}"
+
+Это реальное медицинское заболевание, синдром, аллерген или вещество вызывающее аллергию?
+Ответь ТОЛЬКО YES или NO.
+YES: гипертония, астма, пенициллин, аспирин, диабет, псориаз, лактоза
+NO: привет, тест, 123, рецепт пирога, непонятный текст''')
+    try:
+        from services.ai_service import call_model
+        resp = call_model(prompt, max_tokens=5)
+        return ("YES" in resp.upper()), ""
+    except Exception:
+        return True, ""  # При ошибке AI пропускаем
+
+
 
 @router.callback_query(Registration.waiting_for_chronic, F.data.startswith("chr:"))
 async def cb_chronic(call: CallbackQuery, state: FSMContext):
@@ -963,6 +990,17 @@ async def cb_chronic(call: CallbackQuery, state: FSMContext):
         await call.answer("Сохранено ✅")
         await call.message.delete()
         await _send_hereditary_step(call.message, state)
+        return
+
+    if val == "CUSTOM":
+        await call.answer()
+        await state.update_data(selected_chronic=selected)
+        await state.set_state(Registration.waiting_for_chronic_text)
+        await call.message.answer(
+            "✏️ Введите название заболевания:\n"
+            "_Например: Псориаз, Целиакия, Болезнь Крона_",
+            parse_mode="Markdown",
+        )
         return
 
     # Toggle
@@ -1010,6 +1048,17 @@ async def cb_hereditary(call: CallbackQuery, state: FSMContext):
         await _send_allergy_step(call.message, state)
         return
 
+    if val == "CUSTOM":
+        await call.answer()
+        await state.update_data(selected_hereditary=selected)
+        await state.set_state(Registration.waiting_for_hereditary_text)
+        await call.message.answer(
+            "✏️ Введите заболевание у родственников:\n"
+            "_Например: Рак молочной железы, Болезнь Паркинсона_",
+            parse_mode="Markdown",
+        )
+        return
+
     if val in selected:
         selected.remove(val)
         await call.answer(f"Убрано: {val}")
@@ -1043,7 +1092,7 @@ async def cb_allergy(call: CallbackQuery, state: FSMContext):
         await state.update_data(selected_allergies=selected)
         await call.answer("Сохранено ✅")
         await call.message.delete()
-        await _send_smoking_step(call.message, state)
+        await _send_activity_step(call.message, state)
         return
 
     if val == "NONE":
@@ -1052,6 +1101,17 @@ async def cb_allergy(call: CallbackQuery, state: FSMContext):
         await call.answer("Сохранено ✅")
         await call.message.delete()
         await _send_smoking_step(call.message, state)
+        return
+
+    if val == "CUSTOM":
+        await call.answer()
+        await state.update_data(selected_allergies=selected)
+        await state.set_state(Registration.waiting_for_allergy_text)
+        await call.message.answer(
+            "✏️ Введите аллерген или лекарство:\n"
+            "_Например: Ибупрофен, Кодеин, Тетрациклин_",
+            parse_mode="Markdown",
+        )
         return
 
     if val in selected:
@@ -1066,6 +1126,104 @@ async def cb_allergy(call: CallbackQuery, state: FSMContext):
         await call.message.edit_reply_markup(reply_markup=_build_allergy_inline(selected))
     except Exception:
         pass
+
+
+
+# ── Обработчики ручного ввода в анамнезе ────────────────────────────────────
+
+@router.message(Registration.waiting_for_chronic_text, F.text)
+async def process_chronic_custom(message: Message, state: FSMContext):
+    text = message.text.strip()
+    is_valid, _ = await _validate_medical_input(text)
+    if not is_valid:
+        await message.answer(
+            "❌ Не похоже на название заболевания. Попробуйте ещё раз или нажмите Далее.",
+        )
+        return
+    data = await state.get_data()
+    selected = list(data.get("selected_chronic") or [])
+    if text not in selected:
+        selected.append(text)
+    await state.update_data(selected_chronic=selected)
+    await state.set_state(Registration.waiting_for_chronic)
+    await message.answer(f"✅ Добавлено: {text}")
+    await _send_chronic_step(message, state)
+
+
+@router.message(Registration.waiting_for_hereditary_text, F.text)
+async def process_hereditary_custom(message: Message, state: FSMContext):
+    text = message.text.strip()
+    is_valid, _ = await _validate_medical_input(text)
+    if not is_valid:
+        await message.answer(
+            "❌ Не похоже на название заболевания. Попробуйте ещё раз.",
+        )
+        return
+    data = await state.get_data()
+    selected = list(data.get("selected_hereditary") or [])
+    if text not in selected:
+        selected.append(text)
+    await state.update_data(selected_hereditary=selected)
+    await state.set_state(Registration.waiting_for_hereditary)
+    await message.answer(f"✅ Добавлено: {text}")
+    await _send_hereditary_step(message, state)
+
+
+@router.message(Registration.waiting_for_allergy_text, F.text)
+async def process_allergy_custom(message: Message, state: FSMContext):
+    text = message.text.strip()
+    is_valid, _ = await _validate_medical_input(text)
+    if not is_valid:
+        await message.answer(
+            "❌ Не похоже на аллерген или лекарство. Попробуйте ещё раз.",
+        )
+        return
+    data = await state.get_data()
+    selected = list(data.get("selected_allergies") or [])
+    if text not in selected:
+        selected.append(text)
+    await state.update_data(selected_allergies=selected)
+    await state.set_state(Registration.waiting_for_allergies)
+    await message.answer(f"✅ Добавлено: {text}")
+    await _send_allergy_step(message, state)
+
+
+# ── Физическая активность (шаг 4 из 5) ──────────────────────────────────────
+
+def _build_activity_inline() -> InlineKeyboardMarkup:
+    options = [
+        ("🛋 Низкая (до 30 мин/день)", "low"),
+        ("🚶 Умеренная (30-60 мин/день)", "moderate"),
+        ("🏃 Высокая (более 60 мин/день)", "high"),
+    ]
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"act:{val}")]
+            for label, val in options]
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="act:BACK")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _send_activity_step(message: Message, state: FSMContext):
+    await state.set_state(Registration.waiting_for_activity)
+    await message.answer(
+        "📋 *Медицинская история (4 из 5)*\n\n"
+        "Ваш уровень физической активности:",
+        reply_markup=_build_activity_inline(),
+        parse_mode="Markdown",
+    )
+
+
+@router.callback_query(Registration.waiting_for_activity, F.data.startswith("act:"))
+async def cb_activity(call: CallbackQuery, state: FSMContext):
+    val = call.data[4:]
+    if val == "BACK":
+        await call.message.delete()
+        await call.answer()
+        await _send_allergy_step(call.message, state)
+        return
+    await state.update_data(activity_level=val)
+    await call.answer("✅ Сохранено")
+    await call.message.delete()
+    await _send_smoking_step(call.message, state)
 
 
 # ── Callbacks: курение ───────────────────────────────────────────────────────
@@ -1091,6 +1249,7 @@ async def cb_smoking(call: CallbackQuery, state: FSMContext):
     chronic_list   = data.get("selected_chronic") or []
     hereditary_list = data.get("selected_hereditary") or []
     allergies_str  = ", ".join(data.get("selected_allergies") or [])
+    activity_level = data.get("activity_level", "")
     smoking_value  = val
     is_update = data.get("is_anamnesis_update", False)
 

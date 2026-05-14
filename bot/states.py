@@ -16,6 +16,10 @@ class Registration(StatesGroup):
     waiting_for_hereditary = State()
     waiting_for_allergies = State()
     waiting_for_allergies_text = State()
+    waiting_for_chronic_text = State()     # Ручной ввод хронических
+    waiting_for_hereditary_text = State()  # Ручной ввод наследственных
+    waiting_for_allergy_text = State()     # Ручной ввод аллергий
+    waiting_for_activity = State()         # Физическая активность
     waiting_for_smoking = State()
 
 

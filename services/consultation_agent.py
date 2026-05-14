@@ -193,31 +193,57 @@ def _format_metrics_for_prompt(metrics: dict) -> str:
 
 def validate_symptoms(symptoms: str, language: str = "ru") -> tuple[bool, str]:
     """
-    Быстрая проверка через Claude Haiku — это симптомы или белиберда.
+    Проверяет что пользователь описал симптомы, а не что-то постороннее.
     Возвращает (is_valid, error_message).
     """
-    if len(symptoms.strip()) < 5:
-        msg = "Опишите симптомы подробнее." if language == "ru" else "Alomatlarni batafsilroq tasvirlab bering."
-        return False, msg
+    text = symptoms.strip()
 
-    prompt = f"""Пользователь написал: "{symptoms}"
+    if len(text) < 5:
+        if language == "ru":
+            return False, "Опишите симптомы подробнее."
+        return False, "Alomatlarni batafsilroq tasvirlab bering."
 
-Это описание симптомов, жалоб или проблем со здоровьем? Отвечай ТОЛЬКО "YES" или "NO".
-YES — если это симптомы, боли, дискомфорт, жалобы на здоровье (даже кратко).
-NO — если это бессмыслица, тест, цифры без контекста, случайные символы."""
+    # Быстрая блокировка явно несмедицинских запросов (без AI)
+    NON_MEDICAL = [
+        "рецепт", "recipe", "привет", "hello", "hi", "тест", "test",
+        "проверка", "погода", "курс валют", "футбол", "новости",
+    ]
+    lower = text.lower()
+    for w in NON_MEDICAL:
+        if w in lower:
+            if language == "ru":
+                return False, (
+                    "Пожалуйста, опишите симптомы или жалобы на здоровье.\n\n"
+                    "Например: «болит голова» или «кашель 3 дня»."
+                )
+            return False, (
+                "Iltimos, alomatlatingizni tasvirlab bering.\n\n"
+                "Masalan: «bosh og\'riydi» yoki «3 kundan beri yo\'tal»."
+            )
 
+    # AI проверка для неочевидных случаев
+    prompt = (
+        f"Пользователь написал в медицинский бот: \"{text}\"\n\n"
+        "Это описание симптомов или жалоб на здоровье? Ответь ТОЛЬКО YES или NO.\n"
+        "YES: болит живот, температура, кашель, плохо сплю, тошнит\n"
+        "NO: рецепт пирога, как дела, погода, тест, аааа, любая тема не о здоровье"
+    )
     try:
         from services.ai_service import call_model
         response = call_model(prompt, max_tokens=5)
-        is_valid = "YES" in response.upper()
-        if not is_valid:
+        if "YES" not in response.upper():
             if language == "ru":
-                return False, "Пожалуйста, опишите ваши симптомы или жалобы на здоровье. Например: «болит голова» или «высокая температура, кашель»."
-            else:
-                return False, "Iltimos, alomatlatingizni yoki sog'liq shikoyatlaringizni tasvirlab bering. Masalan: «bosh og'riydi» yoki «isitma, yo'tal»."
+                return False, (
+                    "Пожалуйста, опишите симптомы или жалобы на здоровье.\n\n"
+                    "Например: «болит голова» или «кашель 3 дня»."
+                )
+            return False, (
+                "Iltimos, alomatlatingizni tasvirlab bering.\n\n"
+                "Masalan: «bosh og\'riydi» yoki «3 kundan beri yo\'tal»."
+            )
         return True, ""
     except Exception:
-        return True, ""  # При ошибке пропускаем валидацию
+        return True, ""  # При ошибке AI — пропускаем, не блокируем
 
 
 def check_red_flags(symptoms_text: str, health_metrics: Optional[dict] = None) -> dict:
