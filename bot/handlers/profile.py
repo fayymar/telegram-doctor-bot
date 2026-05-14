@@ -567,13 +567,7 @@ async def process_full_name(message: Message, state: FSMContext):
     await message.answer(
         "📱 *Шаг 2 из 6*\n\n"
         "Поделитесь номером телефона\n\n"
-        "Вы можете:\n"
-        "• Нажать кнопку ниже\n"
-        "• Ввести номер вручную (в любом формате)\n\n"
-        "Примеры:\n"
-        "• +998 90 123 45 67\n"
-        "• 998901234567\n"
-        "• 90 123 45 67",
+        "Нажмите кнопку ниже — Telegram автоматически отправит ваш номер.",
         reply_markup=get_phone_keyboard_with_back(),
         parse_mode="Markdown"
     )
@@ -612,27 +606,16 @@ async def process_phone_contact(message: Message, state: FSMContext):
 
 @router.message(Registration.waiting_for_phone, F.text)
 async def process_phone_text(message: Message, state: FSMContext):
-    """Обработка номера, введённого текстом"""
-    phone_input = message.text.strip()
-
-    success, formatted_phone = await process_phone_input(message, phone_input)
-    if not success:
+    """Ручной ввод телефона — отклоняем, просим использовать кнопку."""
+    # Пропускаем кнопки навигации
+    if message.text in (BACK_TEXT, "❌ Отмена", "🔙 Главное меню"):
         return
-
-    await state.update_data(phone=formatted_phone)
-
     await message.answer(
-        "🎂 *Шаг 3 из 6*\n\n"
-        "Введите ваш возраст\n\n"
-        "Можно просто числом:\n"
-        "• 29\n\n"
-        "Или датой рождения:\n"
-        "• 15.03.1990",
-        reply_markup=get_step_keyboard_with_back(),
+        "📱 Пожалуйста, используйте кнопку *«Поделиться номером»* ниже.\n\n"
+        "Это гарантирует корректный формат номера.",
+        reply_markup=get_phone_keyboard_with_back(),
         parse_mode="Markdown"
     )
-
-    await state.set_state(Registration.waiting_for_birthdate)
 
 
 # =========================================================

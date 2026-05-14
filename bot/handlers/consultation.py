@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from bot.states import Consultation
 from bot.keyboards import get_main_menu, get_cancel_keyboard
 from services.consultation_agent import (
+    validate_symptoms,
     check_red_flags,
     parse_and_generate_questions,
     get_duration_question,
@@ -128,6 +129,14 @@ async def cancel_consultation(message: Message, state: FSMContext):
 async def process_symptoms(message: Message, state: FSMContext):
     symptoms_text = message.text.strip()
     if not symptoms_text:
+        return
+
+    # Шаг 0: Валидация — это вообще симптомы?
+    data = await state.get_data()
+    lang = data.get("language", "ru")
+    is_valid, validation_error = validate_symptoms(symptoms_text, lang)
+    if not is_valid:
+        await message.answer(validation_error, reply_markup=get_cancel_keyboard())
         return
 
     analyzing_msg = await message.answer("⏳ Анализирую симптомы...")
@@ -378,6 +387,50 @@ async def _advance_anamnesis(msg, state: FSMContext, questions: list, next_index
 
     await msg.answer(
         _format_result(result, duration),
-        reply_markup=get_main_menu(),
         parse_mode="HTML",
     )
+
+    # Feedback кнопки
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    feedback_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="👍 Полезно", callback_data=f"fb:good:{user_id}"),
+        InlineKeyboardButton(text="👎 Не помогло", callback_data=f"fb:bad:{user_id}"),
+    ]])
+    await msg.answer(
+        "Была ли рекомендация полезной?",
+        reply_markup=feedback_kb,
+    )
+
+    await msg.answer("Главное меню", reply_markup=get_main_menu())
+
+
+# =========================================================
+# FEEDBACK LOOP
+# =========================================================
+
+@router.callback_query(F.data.startswith("fb:"))
+async def handle_feedback(call: CallbackQuery):
+    """Обработка обратной связи после консультации."""
+    parts = call.data.split(":")
+    verdict = parts[1] if len(parts) > 1 else "unknown"
+    user_id = parts[2] if len(parts) > 2 else "unknown"
+
+    try:
+        # Сохраняем фидбэк в Supabase
+        from database.connection import supabase_client
+        supabase_client.table("consultations").update({
+            "feedback": verdict,
+        }).eq("user_id", int(user_id)).order("created_at", desc=True).limit(1).execute()
+    except Exception as e:
+        logger.warning(f"Feedback save error: {e}")
+
+    if verdict == "good":
+        text = "👍 Спасибо! Рады помочь."
+    else:
+        text = (
+            "👎 Жаль что не помогло.\n\n"
+            "Вы можете начать новую консультацию с более подробным описанием симптомов."
+        )
+
+    await call.message.edit_text(text)
+    await call.answer()

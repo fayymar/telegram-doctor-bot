@@ -190,6 +190,36 @@ def _format_metrics_for_prompt(metrics: dict) -> str:
     return "\n".join(lines)
 
 
+
+def validate_symptoms(symptoms: str, language: str = "ru") -> tuple[bool, str]:
+    """
+    Быстрая проверка через Claude Haiku — это симптомы или белиберда.
+    Возвращает (is_valid, error_message).
+    """
+    if len(symptoms.strip()) < 5:
+        msg = "Опишите симптомы подробнее." if language == "ru" else "Alomatlarni batafsilroq tasvirlab bering."
+        return False, msg
+
+    prompt = f"""Пользователь написал: "{symptoms}"
+
+Это описание симптомов, жалоб или проблем со здоровьем? Отвечай ТОЛЬКО "YES" или "NO".
+YES — если это симптомы, боли, дискомфорт, жалобы на здоровье (даже кратко).
+NO — если это бессмыслица, тест, цифры без контекста, случайные символы."""
+
+    try:
+        from services.ai_service import call_model
+        response = call_model(prompt, max_tokens=5)
+        is_valid = "YES" in response.upper()
+        if not is_valid:
+            if language == "ru":
+                return False, "Пожалуйста, опишите ваши симптомы или жалобы на здоровье. Например: «болит голова» или «высокая температура, кашель»."
+            else:
+                return False, "Iltimos, alomatlatingizni yoki sog'liq shikoyatlaringizni tasvirlab bering. Masalan: «bosh og'riydi» yoki «isitma, yo'tal»."
+        return True, ""
+    except Exception:
+        return True, ""  # При ошибке пропускаем валидацию
+
+
 def check_red_flags(symptoms_text: str, health_metrics: Optional[dict] = None) -> dict:
     """
     Шаг 1: Проверяет наличие красных флагов (экстренных симптомов).
@@ -218,7 +248,7 @@ def check_red_flags(symptoms_text: str, health_metrics: Optional[dict] = None) -
         return {"red_flag": False, "needs_fresh_metrics": []}
 
 
-def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient_history: str = "") -> list:
+def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient_history: str = "", language: str = "ru") -> list:
     """
     Шаг 2: Классифицирует симптомы и генерирует через Groq уточняющие вопросы (1-3).
     Учитывает возраст и пол из user_profile.
@@ -278,6 +308,17 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient
     # """
 
     medical_preamble = _build_medical_preamble(user_profile)
+    lang_instruction = (
+        "Отвечай ТОЛЬКО на русском языке."
+        if language == "ru"
+        else "Faqat o'zbek tilida (lotin alifbosi) javob ber."
+        f" {lang_instruction}"
+    )
+    lang_instruction_final = (
+        "Все ответы ТОЛЬКО на русском языке."
+        if language == "ru"
+        else "Barcha javoblar faqat o'zbek tilida (lotin alifbosi) bo'lsin."
+    )
     system_prompt = (
         f"{medical_preamble}"
         f"Ты — медицинский ассистент. Сгенерируй {num_questions} уточняющих вопроса для пациента "
@@ -468,6 +509,7 @@ def get_final_recommendation(
     user_profile: dict,
     patient_history: str = "",
     health_metrics: Optional[dict] = None,
+    language: str = "ru",
 ) -> dict:
     """
     Шаг 5: Получает финальную рекомендацию через прямой вызов AI.
