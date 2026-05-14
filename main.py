@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timedelta
 from aiohttp import web
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramConflictError
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import MenuButtonDefault
@@ -969,13 +970,27 @@ async def start_bot():
             await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
             logger.info("✅ Global menu button reset to default")
 
+            # Небольшая задержка при старте — даём старому инстансу время завершиться
+            await asyncio.sleep(3)
+
             # Запускаем polling
             logger.info("✅ Bot polling started successfully!")
-            await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+            await dp.start_polling(
+                bot,
+                allowed_updates=dp.resolve_used_update_types(),
+                handle_signals=False,  # manage signals ourselves
+            )
 
         except KeyboardInterrupt:
             logger.info("⚠️ Bot stopped by user")
             break
+
+        except TelegramConflictError:
+            # Two instances running simultaneously (e.g. Render blue-green deploy)
+            # Wait for old instance to die, then retry
+            logger.warning("⚠️ Conflict: another bot instance is running. Waiting 15s for it to stop...")
+            await asyncio.sleep(15)
+            continue
 
         except Exception as e:
             logger.error(f"❌ Bot crashed: {e}", exc_info=True)
