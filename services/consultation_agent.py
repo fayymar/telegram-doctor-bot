@@ -192,72 +192,49 @@ def _format_metrics_for_prompt(metrics: dict) -> str:
 
 
 def validate_symptoms(symptoms: str, language: str = "ru") -> tuple[bool, str]:
-    """
-    Проверяет что пользователь описал реальные симптомы, а не белиберду.
-    Возвращает (is_valid, error_message).
-    """
+    """Один AI вызов — медицинский запрос или нет."""
     text = symptoms.strip()
+    if len(text) < 3:
+        return False, ("Опишите симптомы подробнее." if language == "ru"
+                       else "Alomatlarni batafsilroq tasvirlab bering.")
 
-    if len(text) < 5:
-        return (
-            False,
-            "Опишите симптомы подробнее." if language == "ru"
-            else "Alomatlarni batafsilroq tasvirlab bering."
-        )
-
-    # Быстрая блокировка очевидно не-медицинского
-    NON_MEDICAL_EXACT = [
-        "рецепт", "recipe", "привет", "hello", "hi",
-        "тест", "test", "проверка", "check", "погода",
-        "цен", "цена", "стоимост", "повышение цен", "рост цен",
-        "курс валют", "инфляц", "новост", "политик",
-    ]
-    lower = text.lower()
-    for w in NON_MEDICAL_EXACT:
-        if w in lower:
-            return (
-                False,
-                "Пожалуйста, опишите симптомы или жалобы на здоровье.\n\n"
-                "Например: «болит голова» или «кашель 3 дня»."
-                if language == "ru"
-                else "Iltimos, alomatlatingizni tasvirlab bering.\n\n"
-                "Masalan: «bosh og\'riydi» yoki «3 kundan beri yo\'tal»."
-            )
-
-    # AI проверка: просим назвать конкретный орган или симптом
     prompt = (
-        f'''Пользователь написал: "{text}"
+        f'''Ты — фильтр медицинского бота. Пользователь написал: "{text}"
 
-Выпиши ТОЛЬКО название органа, части тела или медицинского симптома из этого текста.
-Примеры правильных ответов: голова, живот, температура, кашель, спина, горло, сердце.
+Это описание симптомов или жалоб на здоровье человека?
 
-Если в тексте НЕТ реального органа или медицинского симптома — ответь одним словом: НЕТ
+Ответь ТОЛЬКО словом YES или NO.
 
-Важно:
-- "яблочный пирог", "стол", "машина", "интернет" — НЕ органы → пиши НЕТ
-- "болит яблочный пирог" → пирог не орган → пиши НЕТ
-- "болит всё" → расплывчато, нет органа → пиши НЕТ
-- "болит голова" → орган найден → пиши голова''')
+YES если человек описывает:
+- боль, дискомфорт, недомогание в любой части тела
+- температуру тела, кашель, насморк, тошноту
+- усталость, слабость, головокружение
+- любые физические симптомы или изменения самочувствия
+
+NO если это:
+- еда, рецепты, цены на продукты (пирог, желудочки, курица)
+- техника, автомобили, погода, новости, политика
+- тест, проверка, бессмыслица, случайные слова
+- любая тема не связанная с самочувствием человека
+
+Слово "болит" само по себе не делает текст медицинским — объект должен быть частью тела.''')
+
     try:
         from services.ai_service import call_model
-        response = call_model(prompt, max_tokens=15).strip()
-        is_valid = "НЕТ" not in response.upper() and len(response) > 1
-        if not is_valid:
+        resp = call_model(prompt, max_tokens=5).strip().upper()
+        if "YES" not in resp:
             if language == "ru":
                 return False, (
-                    "Не удалось определить что именно вас беспокоит.\n\n"
-                    "Опишите конкретнее — что болит или что вас беспокоит?\n"
+                    "Пожалуйста, опишите симптомы или жалобы на здоровье.\n\n"
                     "Например: «болит голова» или «кашель и температура 38»."
                 )
             return False, (
-                "Aniq alomatni aniqlab bo\'lmadi.\n\n"
-                "Aniqroq tasvirlab bering — nima og\'riydi?\n"
+                "Iltimos, alomatlatingizni tasvirlab bering.\n\n"
                 "Masalan: «bosh og\'riydi» yoki «yo\'tal va 38 isitma»."
             )
         return True, ""
     except Exception:
         return True, ""
-
 
 
 def check_red_flags(symptoms_text: str, health_metrics: Optional[dict] = None) -> dict:
