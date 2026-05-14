@@ -192,46 +192,66 @@ def _format_metrics_for_prompt(metrics: dict) -> str:
 
 
 def validate_symptoms(symptoms: str, language: str = "ru") -> tuple[bool, str]:
-    """Один AI вызов — медицинский запрос или нет."""
+    """
+    Двухуровневая валидация:
+    1. Быстро — эмбеддинги (без токенов, ~30ms)
+    2. При сомнении — Claude Haiku (~1.5s)
+    """
     text = symptoms.strip()
     if len(text) < 3:
         return False, ("Опишите симптомы подробнее." if language == "ru"
                        else "Alomatlarni batafsilroq tasvirlab bering.")
 
+    ERR_RU = (
+        "Пожалуйста, опишите симптомы или жалобы на здоровье.\n\n"
+        "Например: «болит голова» или «кашель и температура 38»."
+    )
+    ERR_UZ = (
+        "Iltimos, alomatlatingizni tasvirlab bering.\n\n"
+        "Masalan: «bosh og\'riydi» yoki «yo\'tal va 38 isitma»."
+    )
+    err_msg = ERR_RU if language == "ru" else ERR_UZ
+
+    # ── Уровень 1: эмбеддинги (быстро, без токенов) ──────────────────────
+    try:
+        from services.symptom_validator import is_medical_symptom
+        is_med, score = is_medical_symptom(text)
+
+        if score >= 0.50:
+            # Высокая уверенность — точно симптом, не тратим токены
+            return True, ""
+
+        if score < 0.25:
+            # Высокая уверенность — точно не симптом
+            return False, err_msg
+
+        # Зона сомнения (0.25–0.50) — передаём в Haiku
+        logger.debug(f"Embedding score {score:.2f} — escalating to Haiku")
+
+    except Exception as e:
+        logger.warning(f"Embedding validator unavailable: {e}")
+        # Падаем сразу на Haiku
+
+    # ── Уровень 2: Claude Haiku (только при сомнении) ─────────────────────
     prompt = (
         f'''Пользователь написал в медицинский бот: "{text}"
 
-Задай себе один вопрос: ЭТОТ КОНКРЕТНЫЙ ЧЕЛОВЕК прямо сейчас жалуется на своё собственное здоровье и самочувствие?
+Это жалоба человека на своё здоровье и самочувствие?
+Ответь ТОЛЬКО: YES или NO.
 
-Ответь ТОЛЬКО: YES или NO
+YES — человек описывает свои симптомы (боль, температура, кашель, слабость и т.д.)
+NO — еда, техника, погода, цены, тест, или что угодно кроме самочувствия человека
 
-YES — человек говорит о своём теле:
-"болит голова" / "температура" / "кашель" / "давление 140/90" / "тошнит"
-
-NO — всё остальное, даже если содержит медицинские слова:
-"куриные сердечки" → это еда, не орган человека
-"повышение давления в яйцах" → это не о теле человека  
-"давление в шинах" → не о теле человека
-"рецепт" / "цены" / "погода" / "тест" → не жалоба на здоровье
-
-Ключевое правило: медицинское слово (давление, сердце, желудок) в контексте ЕДЫ или ПРЕДМЕТОВ = NO''')
+Ключевое правило: медицинское слово в контексте еды или предметов = NO.''')
 
     try:
         from services.ai_service import call_model
         resp = call_model(prompt, max_tokens=5).strip().upper()
         if "YES" not in resp:
-            if language == "ru":
-                return False, (
-                    "Пожалуйста, опишите симптомы или жалобы на здоровье.\n\n"
-                    "Например: «болит голова» или «кашель и температура 38»."
-                )
-            return False, (
-                "Iltimos, alomatlatingizni tasvirlab bering.\n\n"
-                "Masalan: «bosh og\'riydi» yoki «yo\'tal va 38 isitma»."
-            )
+            return False, err_msg
         return True, ""
     except Exception:
-        return True, ""
+        return True, ""  # При ошибке — пропускаем
 
 
 def check_red_flags(symptoms_text: str, health_metrics: Optional[dict] = None) -> dict:
