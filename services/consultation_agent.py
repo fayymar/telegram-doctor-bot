@@ -206,8 +206,12 @@ def validate_symptoms(symptoms: str, language: str = "ru") -> tuple[bool, str]:
         )
 
     # Быстрая блокировка очевидно не-медицинского
-    NON_MEDICAL_EXACT = ["рецепт", "recipe", "привет", "hello", "hi",
-                         "тест", "test", "проверка", "check", "погода"]
+    NON_MEDICAL_EXACT = [
+        "рецепт", "recipe", "привет", "hello", "hi",
+        "тест", "test", "проверка", "check", "погода",
+        "цен", "цена", "стоимост", "повышение цен", "рост цен",
+        "курс валют", "инфляц", "новост", "политик",
+    ]
     lower = text.lower()
     for w in NON_MEDICAL_EXACT:
         if w in lower:
@@ -397,8 +401,10 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient
         if valid:
             return valid[:num_questions]
 
-        logger.warning("Questions generation returned no valid questions, using fallback")
-        return _fallback_questions(primary_cluster)
+        # AI intentionally returned [] — this is NOT a medical symptom
+        # Return None to signal "abort consultation" rather than fallback questions
+        logger.warning("Questions generation returned [] intentionally — non-medical input")
+        return None
 
     except Exception as e:
         logger.error(f"parse_and_generate_questions error: {e}", exc_info=True)

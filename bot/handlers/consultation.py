@@ -169,8 +169,21 @@ async def process_symptoms(message: Message, state: FSMContext):
     patient_history = get_patient_history(message.from_user.id, supabase_client)
 
     # Шаг 2: Генерируем уточняющие вопросы (фильтруем вопросы о давности — они задаются отдельно)
-    questions = parse_and_generate_questions(symptoms_text, user_profile, patient_history)
-    questions = [q for q in questions if not _is_duration_question(q.get("question", ""))]
+    questions_raw = parse_and_generate_questions(symptoms_text, user_profile, patient_history)
+
+    # None = AI определил что это не медицинский запрос
+    if questions_raw is None:
+        await analyzing_msg.delete()
+        await state.clear()
+        await message.answer(
+            "Не удалось определить медицинские симптомы в вашем описании.\n\n"
+            "Пожалуйста, опишите что именно вас беспокоит со здоровьем.\n"
+            "Например: «болит голова», «температура 38», «кашель несколько дней».",
+            reply_markup=get_main_menu(),
+        )
+        return
+
+    questions = [q for q in questions_raw if not _is_duration_question(q.get("question", ""))]
 
     await analyzing_msg.delete()
 
