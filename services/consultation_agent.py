@@ -193,9 +193,11 @@ def _format_metrics_for_prompt(metrics: dict) -> str:
 
 def validate_symptoms(symptoms: str, language: str = "ru") -> tuple[bool, str]:
     """
-    Двухуровневая валидация:
-    1. Быстро — эмбеддинги (без токенов, ~30ms)
-    2. При сомнении — Claude Haiku (~1.5s)
+    Проверяет что пользователь описал симптомы здоровья, а не что-то постороннее.
+    Использует Claude Haiku с чётким промптом.
+    Эмбеддинговая валидация (sentence-transformers) отключена — PyTorch 1.2GB
+    не влезает в Render free tier (512MB RAM). Код сохранён в symptom_validator.py
+    для будущего использования на платном плане.
     """
     text = symptoms.strip()
     if len(text) < 3:
@@ -212,27 +214,6 @@ def validate_symptoms(symptoms: str, language: str = "ru") -> tuple[bool, str]:
     )
     err_msg = ERR_RU if language == "ru" else ERR_UZ
 
-    # ── Уровень 1: эмбеддинги (быстро, без токенов) ──────────────────────
-    try:
-        from services.symptom_validator import is_medical_symptom
-        is_med, score = is_medical_symptom(text)
-
-        if score >= 0.50:
-            # Высокая уверенность — точно симптом, не тратим токены
-            return True, ""
-
-        if score < 0.25:
-            # Высокая уверенность — точно не симптом
-            return False, err_msg
-
-        # Зона сомнения (0.25–0.50) — передаём в Haiku
-        logger.debug(f"Embedding score {score:.2f} — escalating to Haiku")
-
-    except Exception as e:
-        logger.warning(f"Embedding validator unavailable: {e}")
-        # Падаем сразу на Haiku
-
-    # ── Уровень 2: Claude Haiku (только при сомнении) ─────────────────────
     prompt = (
         f'''Пользователь написал в медицинский бот: "{text}"
 
@@ -240,9 +221,10 @@ def validate_symptoms(symptoms: str, language: str = "ru") -> tuple[bool, str]:
 Ответь ТОЛЬКО: YES или NO.
 
 YES — человек описывает свои симптомы (боль, температура, кашель, слабость и т.д.)
-NO — еда, техника, погода, цены, тест, или что угодно кроме самочувствия человека
+NO — еда, техника, погода, цены, тест, или что угодно кроме самочувствия человека.
 
-Ключевое правило: медицинское слово в контексте еды или предметов = NO.''')
+Ключевое правило: медицинское слово в контексте еды или предметов = NO.
+Примеры NO: куриные сердечки, давление в шинах, температура духовки, повышение цен.''')
 
     try:
         from services.ai_service import call_model
@@ -251,7 +233,7 @@ NO — еда, техника, погода, цены, тест, или что �
             return False, err_msg
         return True, ""
     except Exception:
-        return True, ""  # При ошибке — пропускаем
+        return True, ""
 
 
 def check_red_flags(symptoms_text: str, health_metrics: Optional[dict] = None) -> dict:
