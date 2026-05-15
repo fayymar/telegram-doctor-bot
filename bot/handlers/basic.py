@@ -38,39 +38,53 @@ def get_language_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 
+def _get_start_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📱 Продолжить в Telegram", callback_data="start_telegram"),
+        InlineKeyboardButton(text="🌐 Ввести код веб-версии", callback_data="start_web"),
+    ]])
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     """Обработчик команды /start"""
     user_id = message.from_user.id
-    username = message.from_user.username
+    first_name = message.from_user.first_name or "друг"
 
-    # Проверяем, зарегистрирован ли пользователь
+    await message.answer(
+        f"👋 Привет, {first_name}!\n\n"
+        "Как хотите продолжить?",
+        reply_markup=_get_start_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "start_telegram")
+async def start_telegram(callback: CallbackQuery, state: FSMContext):
+    """Продолжить в Telegram — обычный флоу"""
+    user_id = callback.from_user.id
+    await callback.message.delete()
+
     try:
         response = supabase_client.table('user_profiles').select('user_id').eq('user_id', user_id).limit(1).execute()
-        logger.info(f"Start check for user_id={user_id}, result={response.data}")
 
         if response.data:
-            # Пользователь уже зарегистрирован — восстанавливаем Menu Button на случай сброса
             try:
-                await set_webapp_menu_button(message.bot, message.chat.id)
-                logger.info(f"Menu button restored for user_id={user_id}")
+                await set_webapp_menu_button(callback.bot, callback.message.chat.id)
             except Exception as e:
                 logger.warning(f"Failed to set menu button for user_id={user_id}: {e}")
-            await message.answer(
+            await callback.message.answer(
                 "👋 С возвращением!\n\nВыберите действие:",
                 reply_markup=get_main_menu()
             )
         else:
-            # Новый пользователь — сбрасываем Menu Button, показываем только клавиатуру регистрации
             try:
-                await message.bot.set_chat_menu_button(
-                    chat_id=message.chat.id,
+                await callback.bot.set_chat_menu_button(
+                    chat_id=callback.message.chat.id,
                     menu_button=MenuButtonDefault(),
                 )
-                logger.info(f"Menu button reset for new user_id={user_id}")
             except Exception as e:
                 logger.warning(f"Failed to reset menu button for user_id={user_id}: {e}")
-            await message.answer(
+            await callback.message.answer(
                 "👋 Welcome! / Добро пожаловать! / Xush kelibsiz!\n\n"
                 "🌐 Choose your language / Выберите язык / Tilni tanlang:",
                 reply_markup=get_language_keyboard()
@@ -78,11 +92,35 @@ async def cmd_start(message: Message, state: FSMContext):
             await state.set_state(Registration.choosing_language)
 
     except Exception as e:
-        logger.error(f"Database error in cmd_start for user {user_id}: {e}", exc_info=True)
-        await message.answer(
-            "❌ Database error / Ошибка БД / Ma'lumotlar bazasi xatosi\n"
-            "Try again later / Попробуйте позже / Keyinroq urinib ko'ring"
-        )
+        logger.error(f"Database error in start_telegram for user {user_id}: {e}", exc_info=True)
+        await callback.message.answer("❌ Ошибка. Попробуйте ещё раз.")
+
+    await callback.answer()
+
+
+@router.callback_query(F.data == "start_web")
+async def start_web(callback: CallbackQuery):
+    """Ввести код веб-версии"""
+    await callback.message.edit_text(
+        "🌐 <b>Авторизация на сайте СимптоМед</b>\n\n"
+        "1. Откройте <a href=\"https://symed-web.vercel.app/auth\">symed-web.vercel.app</a>\n"
+        "2. Скопируйте 6-значный код с сайта\n"
+        "3. Введите его здесь в ответном сообщении",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="↩️ Назад", callback_data="back_to_start"),
+        ]]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "back_to_start")
+async def back_to_start_cb(callback: CallbackQuery):
+    await callback.message.edit_text(
+        f"👋 Как хотите продолжить?",
+        reply_markup=_get_start_keyboard(),
+    )
+    await callback.answer()
 
 
 _FAQ_TEXT = """❓ *F.A.Q.*
