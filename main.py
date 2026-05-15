@@ -60,6 +60,9 @@ dp.include_router(fallback.router)    # Fallback для зависших FSM (В
 # Хранилище сессий в памяти (для MVP)
 consultation_sessions: dict = {}
 
+# Хранилище кодов авторизации для Web (6-значные коды, живут 10 минут)
+web_auth_codes: dict = {}  # code -> {telegram_id, first_name, last_name, username, photo_url, verified, created_at}
+
 # ── Rate limiting (in-memory, resets on redeploy) ──────────────────────────
 from collections import defaultdict
 import time as _time
@@ -89,6 +92,7 @@ def _rate_limit_response() -> web.Response:
 
 
 ALLOWED_ORIGINS = {
+    "https://symed-web.vercel.app",
     "https://sympto-med-app.vercel.app",
     "https://telegram-doctor-bot.onrender.com",
 }
@@ -127,10 +131,11 @@ async def options_handler(request: web.Request) -> web.Response:
 
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
+    cors_headers = _get_cors_headers(request)
     if request.method == "OPTIONS":
-        return web.Response(status=204, headers=CORS_HEADERS)
+        return web.Response(status=204, headers=cors_headers)
     response = await handler(request)
-    for key, value in CORS_HEADERS.items():
+    for key, value in cors_headers.items():
         response.headers[key] = value
     return response
 
@@ -158,30 +163,22 @@ async def api_consultation_start(request: web.Request) -> web.Response:
     user_id = body.get("user_id")
     symptoms = body.get("symptoms", "").strip()
 
-    missing = []
-    if not user_id:
-        missing.append("user_id")
     if not symptoms:
-        missing.append("symptoms")
-    if missing:
-        logger.warning(f"Consultation start: missing fields {missing}, body={body}")
-        return json_response(
-            {"error": f"Missing required fields: {', '.join(missing)}"},
-            status=400,
-        )
+        logger.warning(f"Consultation start: missing symptoms, body={body}")
+        return json_response({"error": "Missing required field: symptoms"}, status=400)
 
-    # Получаем профиль пользователя из Supabase
-    try:
-        resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", int(user_id)).limit(1).execute())
-        user_profile = (resp.data[0] if resp.data else {})
-    except Exception:
-        user_profile = {}
-
-    # История консультаций
-    patient_history = get_patient_history(user_id, supabase_client)
-
-    # Свежие метрики здоровья
-    health_metrics = get_recent_health_metrics(user_id, supabase_client, hours=24)
+    # Получаем профиль пользователя из Supabase (только если есть user_id)
+    user_profile = {}
+    patient_history = []
+    health_metrics = {"has_any_data": False}
+    if user_id:
+        try:
+            resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", int(user_id)).limit(1).execute())
+            user_profile = (resp.data[0] if resp.data else {})
+        except Exception:
+            user_profile = {}
+        patient_history = get_patient_history(user_id, supabase_client)
+        health_metrics = get_recent_health_metrics(user_id, supabase_client, hours=24)
     logger.info(f"Health metrics for user_id={user_id}: has_data={health_metrics.get('has_any_data')}")
 
     # Шаг 1: Красные флаги (с учётом метрик)
@@ -340,19 +337,22 @@ async def api_consultation_result(request: web.Request) -> web.Response:
             health_metrics=session.get("health_metrics"),
         )
 
-        # Сохраняем в Supabase
-        try:
+        # Сохраняем в Supabase (только для авторизованных пользователей)
+        specialists_raw = recommendation.get("specialists", [])
+        if session.get("user_id"):
+            try:
+                recommended_doctor = specialists_raw[0]["name"] if specialists_raw else "Терапевт"
+                await run_query(lambda: supabase_client.table("consultations").insert({
+                    "user_id": session["user_id"],
+                    "symptoms": json.dumps({"text": session["symptoms"], "history": [a for a in session["answers"] if a]}, ensure_ascii=False),
+                    "questions_answers": json.dumps(all_data, ensure_ascii=False),
+                    "recommended_doctor": recommended_doctor,
+                    "urgency_level": recommendation.get("urgency", "medium"),
+                }).execute())
+            except Exception as e:
+                logger.error(f"Failed to save consultation to Supabase: {e}", exc_info=True)
+        else:
             specialists_raw = recommendation.get("specialists", [])
-            recommended_doctor = specialists_raw[0]["name"] if specialists_raw else "Терапевт"
-            await run_query(lambda: supabase_client.table("consultations").insert({
-                "user_id": session["user_id"],
-                "symptoms": json.dumps({"text": session["symptoms"], "history": [a for a in session["answers"] if a]}, ensure_ascii=False),
-                "questions_answers": json.dumps(all_data, ensure_ascii=False),
-                "recommended_doctor": recommended_doctor,
-                "urgency_level": recommendation.get("urgency", "medium"),
-            }).execute())
-        except Exception as e:
-            logger.error(f"Failed to save consultation to Supabase: {e}", exc_info=True)
 
         # Нормализуем specialists: match_percent → percentage для Mini App
         specialists_out = [
@@ -935,6 +935,88 @@ async def api_consultations_get(request: web.Request) -> web.Response:
         return json_response({'records': [], 'has_data': False})
 
 
+
+async def api_auth_request(request: web.Request) -> web.Response:
+    """POST /api/auth/request — регистрирует 6-значный код для web-авторизации"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(status=204, headers=_get_cors_headers(request))
+
+    code = str(body.get("code", "")).strip()
+    if not code or not code.isdigit() or len(code) != 6:
+        return web.Response(
+            text=json.dumps({"error": "Invalid code"}, ensure_ascii=False),
+            status=400, content_type="application/json",
+            headers=_get_cors_headers(request)
+        )
+
+    # Удаляем старые коды этого же источника (по IP) — не обязательно, просто чистота
+    web_auth_codes[code] = {
+        "telegram_id": None,
+        "first_name": None,
+        "last_name": None,
+        "username": None,
+        "photo_url": None,
+        "verified": False,
+        "created_at": datetime.utcnow(),
+    }
+    logger.info(f"Web auth code registered: {code}")
+    return web.Response(
+        text=json.dumps({"ok": True, "expires_in": 600}, ensure_ascii=False),
+        status=200, content_type="application/json",
+        headers=_get_cors_headers(request)
+    )
+
+
+async def api_auth_status(request: web.Request) -> web.Response:
+    """GET /api/auth/status/{code} — проверяет статус верификации кода"""
+    code = request.match_info.get("code", "")
+    entry = web_auth_codes.get(code)
+
+    if not entry:
+        return web.Response(
+            text=json.dumps({"verified": False, "error": "Code not found or expired"}, ensure_ascii=False),
+            status=404, content_type="application/json",
+            headers=_get_cors_headers(request)
+        )
+
+    # Проверяем expiry (10 минут)
+    age = (datetime.utcnow() - entry["created_at"]).total_seconds()
+    if age > 600:
+        web_auth_codes.pop(code, None)
+        return web.Response(
+            text=json.dumps({"verified": False, "error": "Code expired"}, ensure_ascii=False),
+            status=404, content_type="application/json",
+            headers=_get_cors_headers(request)
+        )
+
+    if not entry["verified"]:
+        return web.Response(
+            text=json.dumps({"verified": False}, ensure_ascii=False),
+            status=200, content_type="application/json",
+            headers=_get_cors_headers(request)
+        )
+
+    # Верифицирован — возвращаем данные и удаляем код
+    user_data = {
+        "verified": True,
+        "id": entry["telegram_id"],
+        "first_name": entry["first_name"],
+        "last_name": entry["last_name"],
+        "username": entry["username"],
+        "photo_url": entry["photo_url"],
+        "auth_date": int(datetime.utcnow().timestamp()),
+    }
+    web_auth_codes.pop(code, None)
+    logger.info(f"Web auth code {code} consumed for user {entry['telegram_id']}")
+    return web.Response(
+        text=json.dumps(user_data, ensure_ascii=False),
+        status=200, content_type="application/json",
+        headers=_get_cors_headers(request)
+    )
+
+
 async def cleanup_stale_sessions():
     """Удаляет сессии консультаций старше 2 часов из памяти."""
     while True:
@@ -1026,6 +1108,8 @@ async def start_web_server():
         app.router.add_post('/api/health/metrics', api_health_metrics_post)
         app.router.add_post('/api/health/metrics/report/{user_id}', api_health_metrics_report)
         app.router.add_get('/api/health/metrics/{user_id}', api_health_metrics_get)
+        app.router.add_post('/api/auth/request', api_auth_request)
+        app.router.add_get('/api/auth/status/{code}', api_auth_status)
 
         runner = web.AppRunner(app)
         await runner.setup()
