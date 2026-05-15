@@ -297,49 +297,43 @@ async def cmd_heartrate(message: Message):
 @router.message(F.text.regexp(r'^\d{6}$'))
 async def handle_web_auth_code(message: Message):
     """Обработчик 6-значных кодов для авторизации на сайте."""
-    import main as _main  # noqa — доступ к web_auth_codes из основного модуля
+    import main as _main  # noqa
 
     code = message.text.strip()
     entry = _main.web_auth_codes.get(code)
 
     if not entry:
         await message.answer(
-            "❌ Код не найден или уже истёк.
-
-"
+            "\u274c Код не найден или уже истёк.\n\n"
             "Откройте symed-web.vercel.app и получите новый код."
         )
         return
 
     from datetime import datetime as _dt
-    age = (_dt.utcnow() - entry["created_at"]).total_seconds()
+    age = (_dt.utcnow() - entry['created_at']).total_seconds()
     if age > 600:
         _main.web_auth_codes.pop(code, None)
         await message.answer(
-            "⏰ Код истёк (действует 10 минут).
-
-"
+            "\u23f0 Код истёк (действует 10 минут).\n\n"
             "Откройте symed-web.vercel.app и получите новый код."
         )
         return
 
-    if entry["verified"]:
-        await message.answer("✅ Этот код уже использован.")
+    if entry['verified']:
+        await message.answer("\u2705 Этот код уже использован.")
         return
 
     user = message.from_user
-    entry["verified"] = True
-    entry["telegram_id"] = user.id
-    entry["first_name"] = user.first_name or ""
-    entry["last_name"] = user.last_name or ""
-    entry["username"] = user.username or ""
-    entry["photo_url"] = None  # Telegram не отдаёт фото напрямую
+    entry['verified'] = True
+    entry['telegram_id'] = user.id
+    entry['first_name'] = user.first_name or ''
+    entry['last_name'] = user.last_name or ''
+    entry['username'] = user.username or ''
+    entry['photo_url'] = None
 
-    logger.info(f"Web auth code {code} verified for user_id={user.id}")
+    logger.info(f'Web auth code {code} verified for user_id={user.id}')
 
     await message.answer(
-        f"✅ Вы успешно вошли на СимптоМед!
-
-"
-        f"Вернитесь на сайт — страница автоматически обновится."
+        "\u2705 Вы успешно вошли в СимптоМед!\n\n"
+        "Вернитесь на сайт \u2014 страница автоматически обновится."
     )
