@@ -297,10 +297,10 @@ async def cmd_heartrate(message: Message):
 @router.message(F.text.regexp(r'^\d{6}$'))
 async def handle_web_auth_code(message: Message):
     """Обработчик 6-значных кодов для авторизации на сайте."""
-    import main as _main  # noqa
+    from bot.shared import web_auth_codes
 
     code = message.text.strip()
-    entry = _main.web_auth_codes.get(code)
+    entry = web_auth_codes.get(code)
 
     if not entry:
         await message.answer(
@@ -312,7 +312,7 @@ async def handle_web_auth_code(message: Message):
     from datetime import datetime as _dt
     age = (_dt.utcnow() - entry['created_at']).total_seconds()
     if age > 600:
-        _main.web_auth_codes.pop(code, None)
+        web_auth_codes.pop(code, None)
         await message.answer(
             "\u23f0 Код истёк (действует 10 минут).\n\n"
             "Откройте symed-web.vercel.app и получите новый код."

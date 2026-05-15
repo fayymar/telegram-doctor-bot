@@ -60,8 +60,8 @@ dp.include_router(fallback.router)    # Fallback для зависших FSM (В
 # Хранилище сессий в памяти (для MVP)
 consultation_sessions: dict = {}
 
-# Хранилище кодов авторизации для Web (6-значные коды, живут 10 минут)
-web_auth_codes: dict = {}  # code -> {telegram_id, first_name, last_name, username, photo_url, verified, created_at}
+# Хранилище кодов авторизации для Web — shared с bot handlers
+from bot.shared import web_auth_codes
 
 # ── Rate limiting (in-memory, resets on redeploy) ──────────────────────────
 from collections import defaultdict
