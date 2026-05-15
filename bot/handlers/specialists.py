@@ -3,7 +3,7 @@ from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 
 from bot.states import FindSpecialist
-from bot.keyboards import get_specialist_categories, get_specialists_in_category, get_specialist_actions, get_main_menu
+from bot.keyboards import get_specialist_categories, get_specialists_in_category, get_specialist_actions
 
 
 router = Router()

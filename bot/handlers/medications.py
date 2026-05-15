@@ -5,7 +5,7 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 
 from bot.states import MedicationReminder
-from bot.keyboards import get_main_menu, get_cancel_keyboard
+from bot.keyboards import get_cancel_keyboard
 from database.connection import supabase_client
 from utils.logger import setup_logger
 from utils.validators import sanitize_text

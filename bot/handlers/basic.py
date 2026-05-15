@@ -8,7 +8,7 @@ from aiogram.types import (
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
-from bot.keyboards import get_main_menu, get_gender_keyboard, get_clinics_specialists_submenu
+from bot.keyboards import get_main_menu, get_clinics_specialists_submenu
 from bot.states import Registration
 from database.connection import supabase_client
 from utils.logger import setup_logger

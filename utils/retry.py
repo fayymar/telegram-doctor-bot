@@ -1,7 +1,7 @@
 """Утилиты для retry логики при сбоях"""
 import asyncio
 import time
-from typing import Callable, Any, Optional, TypeVar
+from typing import Callable, Any, TypeVar
 from functools import wraps
 from utils.logger import setup_logger
 

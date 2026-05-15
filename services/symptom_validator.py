@@ -1,7 +1,12 @@
 """
-Embedding-based symptom validator.
-Uses paraphrase-multilingual-MiniLM-L12-v2 for Russian/Uzbek support.
-Loaded once at bot startup, stays in memory.
+⚠️  OPTIONAL MODULE — NOT IMPORTED IN PRODUCTION
+
+Requires sentence-transformers which pulls PyTorch (1.2GB).
+Render free tier has only 512MB RAM → OOM on load.
+
+To enable: add "sentence-transformers==3.0.1" to requirements.txt
+and uncomment the import in services/consultation_agent.py.
+Only use on paid plan (Render Starter+, 2GB+ RAM).
 """
 import json
 import logging
@@ -27,7 +32,7 @@ def _load_model():
         return _model is not None
 
     try:
-        from sentence_transformers import SentenceTransformer
+        from sentence_transformers import SentenceTransformer  # noqa: heavy-optional
         import numpy as np
 
         logger.info("Loading symptom embedding model...")

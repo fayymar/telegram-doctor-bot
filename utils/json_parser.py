@@ -1,7 +1,7 @@
 """Утилиты для безопасного парсинга JSON из AI ответов"""
 import json
 import re
-from typing import Optional, Dict, List, Any, Union
+from typing import Optional, Dict, List, Union
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)

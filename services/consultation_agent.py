@@ -1,5 +1,5 @@
-from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Optional
+from datetime import datetime, timedelta
+from typing import Optional
 
 from services.ai_service import AIService
 from services.symptom_parser import parse_symptoms

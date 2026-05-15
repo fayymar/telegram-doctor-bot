@@ -3,9 +3,6 @@
 Скрипт для первоначальной настройки проекта
 """
 import os
-import sys
-
-
 def create_directories():
     """Создать необходимые директории"""
     directories = [
