@@ -93,6 +93,8 @@ def _rate_limit_response() -> web.Response:
 
 ALLOWED_ORIGINS = {
     "https://symed-web.vercel.app",
+    "https://symed.uz",
+    "https://www.symed.uz",
     "https://sympto-med-app.vercel.app",
     "https://telegram-doctor-bot.onrender.com",
 }
