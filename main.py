@@ -385,7 +385,7 @@ async def api_consultation_result(request: web.Request) -> web.Response:
 
 _PROFILE_FIELDS = [
     "full_name", "phone", "birthdate", "gender", "height", "weight",
-    "chronic_diseases", "drug_allergies", "smoking", "hereditary",
+    "chronic_diseases", "drug_allergies", "smoking", "hereditary", "physical_activity",
 ]
 
 
