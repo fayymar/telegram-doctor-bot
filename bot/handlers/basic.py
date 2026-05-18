@@ -20,11 +20,11 @@ WEBAPP_URL = "https://sympto-med-app.vercel.app"
 
 
 async def set_webapp_menu_button(bot, chat_id: int) -> None:
-    """Устанавливает кнопку СимптоМед в меню чата."""
+    """Устанавливает кнопку Symed в меню чата."""
     await bot.set_chat_menu_button(
         chat_id=chat_id,
         menu_button=MenuButtonWebApp(
-            text="СимптоМед",
+            text="Symed",
             web_app=WebAppInfo(url=WEBAPP_URL),
         ),
     )
@@ -102,7 +102,7 @@ async def start_telegram(callback: CallbackQuery, state: FSMContext):
 async def start_web(callback: CallbackQuery):
     """Ввести код веб-версии"""
     await callback.message.edit_text(
-        "🌐 <b>Авторизация на сайте СимптоМед</b>\n\n"
+        "🌐 <b>Авторизация на сайте Symed</b>\n\n"
         "1. Откройте <a href=\"https://symed-web.vercel.app/auth\">symed-web.vercel.app</a>\n"
         "2. Скопируйте 6-значный код с сайта\n"
         "3. Введите его здесь в ответном сообщении",
@@ -266,7 +266,7 @@ async def cmd_profile(message: Message):
         if not rows:
             await message.answer(
                 "Профиль не заполнен. Отправьте /start чтобы пройти регистрацию, "
-                "или откройте приложение СимптоМед."
+                "или откройте приложение Symed."
             )
             return
 
@@ -321,11 +321,11 @@ async def cmd_heartrate(message: Message):
     """Обработчик команды /heartrate"""
     await message.answer(
         "❤️ Отслеживание пульса\n\n"
-        "Откройте приложение СимптоМед чтобы:\n"
+        "Откройте приложение Symed чтобы:\n"
         "- Отправить текущий пульс с Apple Watch\n"
         "- Посмотреть историю измерений\n"
         "- Настроить автоматическую отправку\n\n"
-        'Нажмите кнопку "СимптоМед" внизу экрана (рядом с полем ввода) чтобы открыть приложение.'
+        'Нажмите кнопку "Symed" внизу экрана (рядом с полем ввода) чтобы открыть приложение.'
     )
 
 
@@ -372,6 +372,6 @@ async def handle_web_auth_code(message: Message):
     logger.info(f'Web auth code {code} verified for user_id={user.id}')
 
     await message.answer(
-        "\u2705 Вы успешно вошли в СимптоМед!\n\n"
+        "\u2705 Вы успешно вошли в Symed!\n\n"
         "Вернитесь на сайт \u2014 страница автоматически обновится."
     )
