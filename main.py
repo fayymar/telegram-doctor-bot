@@ -1103,6 +1103,8 @@ async def start_web_server():
         app.router.add_post('/api/consultation/duration', api_consultation_duration)
         app.router.add_post('/api/consultation/result', api_consultation_result)
         app.router.add_get('/api/consultations/{user_id}', api_consultations_get)
+        app.router.add_get('/api/medications/{user_id}', api_medications_get)
+        app.router.add_get('/api/diary/{user_id}', api_diary_get)
         app.router.add_get('/api/profile/{user_id}', api_profile_get)
         app.router.add_post('/api/profile/{user_id}', api_profile_post)
         app.router.add_get('/api/health/heartrate/{user_id}', api_health_heartrate_get)
@@ -1133,6 +1135,48 @@ async def start_web_server():
     except Exception as e:
         logger.critical(f"❌ Failed to start web server: {e}", exc_info=True)
         raise
+
+
+
+async def api_medications_get(request: web.Request) -> web.Response:
+    """GET /api/medications/{user_id} — список активных лекарств пользователя"""
+    user_id = request.match_info.get('user_id')
+    if not user_id:
+        return json_response({'error': 'user_id required'}, status=400)
+    try:
+        resp = await run_query(
+            lambda: supabase_client.table('medications')
+            .select('id, medication_name, dosage, frequency, times, start_date, end_date, notes')
+            .eq('user_id', int(user_id))
+            .eq('is_active', True)
+            .order('created_at', desc=True)
+            .execute()
+        )
+        return json_response({'records': resp.data or [], 'has_data': bool(resp.data)})
+    except Exception as e:
+        logger.error(f'Medications GET error for {user_id}: {e}', exc_info=True)
+        return json_response({'records': [], 'has_data': False})
+
+
+async def api_diary_get(request: web.Request) -> web.Response:
+    """GET /api/diary/{user_id} — записи дневника здоровья"""
+    user_id = request.match_info.get('user_id')
+    if not user_id:
+        return json_response({'error': 'user_id required'}, status=400)
+    try:
+        resp = await run_query(
+            lambda: supabase_client.table('health_diary')
+            .select('id, entry_date, entry_time, temperature, blood_pressure_sys, blood_pressure_dia, pulse, weight, mood, symptoms, notes')
+            .eq('user_id', int(user_id))
+            .order('entry_date', desc=True)
+            .order('entry_time', desc=True)
+            .limit(30)
+            .execute()
+        )
+        return json_response({'records': resp.data or [], 'has_data': bool(resp.data)})
+    except Exception as e:
+        logger.error(f'Diary GET error for {user_id}: {e}', exc_info=True)
+        return json_response({'records': [], 'has_data': False})
 
 
 async def main():
