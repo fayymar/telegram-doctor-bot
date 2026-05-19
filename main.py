@@ -921,7 +921,22 @@ async def api_consultations_get(request: web.Request) -> web.Response:
             symptoms_raw = r.get('symptoms', '')
             try:
                 symptoms_parsed = json.loads(symptoms_raw) if symptoms_raw else {}
-                symptoms_text = symptoms_parsed.get('text', symptoms_raw)
+                if 'text' in symptoms_parsed:
+                    symptoms_text = symptoms_parsed['text']
+                elif 'history' in symptoms_parsed and symptoms_parsed['history']:
+                    first = next(
+                        (h for h in symptoms_parsed['history'] if not h.get('question')),
+                        symptoms_parsed['history'][0]
+                    )
+                    symptoms_text = first.get('answer', symptoms_raw)
+                elif isinstance(symptoms_parsed, list) and symptoms_parsed:
+                    first = next(
+                        (h for h in symptoms_parsed if not h.get('question')),
+                        symptoms_parsed[0]
+                    )
+                    symptoms_text = first.get('answer', symptoms_raw)
+                else:
+                    symptoms_text = symptoms_raw
             except Exception:
                 symptoms_text = symptoms_raw
             records.append({
@@ -1104,6 +1119,8 @@ async def start_web_server():
         app.router.add_post('/api/consultation/result', api_consultation_result)
         app.router.add_get('/api/consultations/{user_id}', api_consultations_get)
         app.router.add_get('/api/medications/{user_id}', api_medications_get)
+        app.router.add_post('/api/medications/{user_id}', api_medications_post)
+        app.router.add_post('/api/diary/{user_id}', api_diary_post)
         app.router.add_get('/api/diary/{user_id}', api_diary_get)
         app.router.add_get('/api/profile/{user_id}', api_profile_get)
         app.router.add_post('/api/profile/{user_id}', api_profile_post)
@@ -1138,6 +1155,71 @@ async def start_web_server():
 
 
 
+async def api_medications_post(request: web.Request) -> web.Response:
+    """POST /api/medications/{user_id} — добавить лекарство"""
+    user_id = request.match_info.get('user_id')
+    if not user_id:
+        return json_response({'error': 'user_id required'}, status=400)
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({'error': 'invalid JSON'}, status=400)
+    try:
+        row = {
+            'user_id': int(user_id),
+            'medication_name': body.get('name') or body.get('medication_name', ''),
+            'dosage': body.get('dosage', ''),
+            'frequency': body.get('frequency', ''),
+            'times': body.get('times', []),
+            'start_date': body.get('start_date') or None,
+            'end_date': body.get('end_date') or None,
+            'notes': body.get('notes', ''),
+            'is_active': True,
+        }
+        resp = await run_query(
+            lambda: supabase_client.table('medications').insert(row).execute()
+        )
+        inserted = (resp.data or [{}])[0]
+        return json_response({'ok': True, 'id': inserted.get('id')})
+    except Exception as e:
+        logger.error(f'Medications POST error for {user_id}: {e}', exc_info=True)
+        return json_response({'error': str(e)}, status=500)
+
+
+async def api_diary_post(request: web.Request) -> web.Response:
+    """POST /api/diary/{user_id} — добавить запись дневника"""
+    user_id = request.match_info.get('user_id')
+    if not user_id:
+        return json_response({'error': 'user_id required'}, status=400)
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({'error': 'invalid JSON'}, status=400)
+    try:
+        from datetime import date, datetime
+        today = date.today().isoformat()
+        now_time = datetime.now().strftime('%H:%M:%S')
+        row = {
+            'user_id': int(user_id),
+            'entry_date': body.get('entry_date', today),
+            'entry_time': body.get('entry_time', now_time),
+        }
+        for field in ('temperature', 'blood_pressure_sys', 'blood_pressure_dia', 'pulse', 'weight'):
+            if field in body and body[field] is not None:
+                row[field] = body[field]
+        for field in ('mood', 'symptoms', 'notes'):
+            if field in body and body[field]:
+                row[field] = body[field]
+        resp = await run_query(
+            lambda: supabase_client.table('health_diary').insert(row).execute()
+        )
+        inserted = (resp.data or [{}])[0]
+        return json_response({'ok': True, 'id': inserted.get('id')})
+    except Exception as e:
+        logger.error(f'Diary POST error for {user_id}: {e}', exc_info=True)
+        return json_response({'error': str(e)}, status=500)
+
+
 async def api_medications_get(request: web.Request) -> web.Response:
     """GET /api/medications/{user_id} — список активных лекарств пользователя"""
     user_id = request.match_info.get('user_id')
@@ -1166,14 +1248,20 @@ async def api_diary_get(request: web.Request) -> web.Response:
     try:
         resp = await run_query(
             lambda: supabase_client.table('health_diary')
-            .select('id, entry_date, entry_time, temperature, blood_pressure_sys, blood_pressure_dia, pulse, weight, mood, symptoms, notes')
+            .select('id, entry_date, entry_time, created_at, temperature, blood_pressure_sys, blood_pressure_dia, pulse, weight, mood, symptoms, notes')
             .eq('user_id', int(user_id))
             .order('entry_date', desc=True)
             .order('entry_time', desc=True)
             .limit(30)
             .execute()
         )
-        return json_response({'records': resp.data or [], 'has_data': bool(resp.data)})
+        rows = resp.data or []
+        entries = []
+        for row in rows:
+            # Normalize created_at for web display
+            created_at = row.get('created_at') or f"{row.get('entry_date', '')}T{row.get('entry_time', '00:00:00')}"
+            entries.append({**row, 'created_at': created_at})
+        return json_response({'records': entries, 'has_data': bool(entries)})
     except Exception as e:
         logger.error(f'Diary GET error for {user_id}: {e}', exc_info=True)
         return json_response({'records': [], 'has_data': False})
