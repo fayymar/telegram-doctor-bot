@@ -953,6 +953,77 @@ async def api_consultations_get(request: web.Request) -> web.Response:
 
 
 
+async def api_auth_social(request: web.Request) -> web.Response:
+    """POST /api/auth/social — register or find user from OAuth / email provider"""
+    cors = _get_cors_headers(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(status=400, text=json.dumps({"error": "invalid json"}),
+                            content_type="application/json", headers=cors)
+
+    provider    = str(body.get("provider", "email")).strip()
+    email       = str(body.get("email", "")).strip().lower()
+    name        = str(body.get("name", "")).strip()
+    provider_id = str(body.get("provider_id", "")).strip()
+    avatar      = body.get("avatar") or None
+
+    if not email and not provider_id:
+        return web.Response(status=400, text=json.dumps({"error": "email or provider_id required"}),
+                            content_type="application/json", headers=cors)
+
+    # Generate a stable integer user_id from provider_id or email
+    import hashlib
+    seed = provider_id if provider_id else email
+    h = int(hashlib.sha256(seed.encode()).hexdigest()[:12], 16)
+    # Use range 5_000_000_000 – 9_999_999_999 to avoid clash with Telegram IDs
+    user_id = 5_000_000_000 + (h % 4_999_999_999)
+
+    first_name = name.split()[0] if name else email.split("@")[0]
+    last_name  = " ".join(name.split()[1:]) if name and len(name.split()) > 1 else None
+
+    try:
+        existing = await run_query(
+            lambda: supabase_client.table("user_profiles")
+                .select("user_id, full_name, phone")
+                .eq("user_id", user_id).limit(1).execute()
+        )
+
+        if not existing.data:
+            # Create new profile
+            await run_query(
+                lambda: supabase_client.table("user_profiles").insert({
+                    "user_id":    user_id,
+                    "full_name":  name or first_name,
+                    "phone":      None,
+                    "gender":     None,
+                    "birthdate":  None,
+                }).execute()
+            )
+            logger.info(f"Social auth: created user_id={user_id} via {provider} ({email})")
+        else:
+            logger.info(f"Social auth: found user_id={user_id} via {provider}")
+
+        return web.Response(
+            text=json.dumps({
+                "id":         user_id,
+                "first_name": first_name,
+                "last_name":  last_name,
+                "username":   None,
+                "photo_url":  avatar,
+                "provider":   provider,
+                "email":      email,
+                "auth_date":  int(datetime.utcnow().timestamp()),
+            }, ensure_ascii=False),
+            status=200, content_type="application/json", headers=cors,
+        )
+
+    except Exception as e:
+        logger.error(f"Social auth error: {e}", exc_info=True)
+        return web.Response(status=500, text=json.dumps({"error": str(e)}),
+                            content_type="application/json", headers=cors)
+
+
 async def api_auth_request(request: web.Request) -> web.Response:
     """POST /api/auth/request — регистрирует 6-значный код для web-авторизации"""
     try:
@@ -1129,6 +1200,7 @@ async def start_web_server():
         app.router.add_post('/api/health/metrics', api_health_metrics_post)
         app.router.add_post('/api/health/metrics/report/{user_id}', api_health_metrics_report)
         app.router.add_get('/api/health/metrics/{user_id}', api_health_metrics_get)
+        app.router.add_post('/api/auth/social', api_auth_social)
         app.router.add_post('/api/auth/request', api_auth_request)
         app.router.add_get('/api/auth/status/{code}', api_auth_status)
 
