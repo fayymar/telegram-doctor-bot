@@ -1000,8 +1000,10 @@ async def api_auth_social(request: web.Request) -> web.Response:
                     "birthdate":  None,
                 }).execute()
             )
+            is_new = True
             logger.info(f"Social auth: created user_id={user_id} via {provider} ({email})")
         else:
+            is_new = False
             logger.info(f"Social auth: found user_id={user_id} via {provider}")
 
         return web.Response(
@@ -1013,6 +1015,7 @@ async def api_auth_social(request: web.Request) -> web.Response:
                 "photo_url":  avatar,
                 "provider":   provider,
                 "email":      email,
+                "is_new":     is_new,
                 "auth_date":  int(datetime.utcnow().timestamp()),
             }, ensure_ascii=False),
             status=200, content_type="application/json", headers=cors,
