@@ -99,6 +99,66 @@ async def cmd_start(message: Message, state: FSMContext):
         )
         return
 
+    if payload.startswith("link_"):
+        code = payload[5:]
+        from bot.shared import link_codes
+        from database.connection import supabase_client as _sb
+        from datetime import datetime as _dt2
+
+        entry = link_codes.get(code)
+        if not entry:
+            await message.answer("❌ Код привязки не найден или истёк.\n\nОткройте Symed → Профиль → Подключить Telegram.")
+            return
+
+        age = (_dt2.utcnow() - entry["created_at"]).total_seconds()
+        if age > 600:
+            link_codes.pop(code, None)
+            await message.answer("⏰ Код истёк (10 минут). Получите новый в Symed.")
+            return
+
+        if entry.get("verified"):
+            await message.answer("✅ Аккаунты уже связаны.")
+            return
+
+        tg_id  = message.from_user.id
+        web_id = entry["web_user_id"]
+
+        try:
+            tg_resp  = _sb.table("user_profiles").select("*").eq("user_id", tg_id).limit(1).execute()
+            web_resp = _sb.table("user_profiles").select("*").eq("user_id", web_id).limit(1).execute()
+            tg_profile  = tg_resp.data[0]  if tg_resp.data  else {}
+            web_profile = web_resp.data[0] if web_resp.data else {}
+
+            merge_fields = ["birthdate", "gender", "height", "weight", "phone",
+                            "chronic_diseases", "drug_allergies", "smoking",
+                            "hereditary", "physical_activity"]
+            update_web = {"linked_telegram_id": str(tg_id)}
+            for field in merge_fields:
+                if tg_profile.get(field) and not web_profile.get(field):
+                    update_web[field] = tg_profile[field]
+            if not web_profile.get("full_name") and tg_profile.get("full_name"):
+                update_web["full_name"] = tg_profile["full_name"]
+
+            _sb.table("user_profiles").upsert({"user_id": web_id, **update_web}, on_conflict="user_id").execute()
+            _sb.table("user_profiles").upsert({"user_id": tg_id, "linked_web_id": str(web_id)}, on_conflict="user_id").execute()
+
+            entry["verified"]    = True
+            entry["telegram_id"] = tg_id
+            link_codes[code]     = entry
+
+            logger.info(f"Deep-link account linked: tg={tg_id} <-> web={web_id}")
+            await message.answer(
+                f"✅ <b>Аккаунты успешно связаны, {first_name}!</b>\n\n"
+                "Ваши данные в Telegram и на сайте Symed теперь синхронизированы. "
+                "Вернитесь на сайт — он уже обновился.",
+                parse_mode="HTML",
+                reply_markup=_get_start_keyboard(),
+            )
+        except Exception as e:
+            logger.error(f"Deep-link link error: {e}", exc_info=True)
+            await message.answer("⚠️ Ошибка при связывании. Попробуйте ещё раз.")
+        return
+
     # Обычный /start
     await message.answer(
         f"👋 Привет, {first_name}!\n\nКак хотите продолжить?",
