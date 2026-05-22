@@ -61,7 +61,7 @@ dp.include_router(fallback.router)    # Fallback для зависших FSM (В
 consultation_sessions: dict = {}
 
 # Хранилище кодов авторизации для Web — shared с bot handlers
-from bot.shared import web_auth_codes
+from bot.shared import web_auth_codes, link_codes
 
 # ── Rate limiting (in-memory, resets on redeploy) ──────────────────────────
 from collections import defaultdict
@@ -1027,6 +1027,55 @@ async def api_auth_social(request: web.Request) -> web.Response:
                             content_type="application/json", headers=cors)
 
 
+
+async def api_auth_link_request(request: web.Request) -> web.Response:
+    """POST /api/auth/link-request — generate a link code for a web user"""
+    cors = _get_cors_headers(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(status=400, text=json.dumps({"error": "invalid json"}),
+                            content_type="application/json", headers=cors)
+
+    web_user_id = body.get("user_id")
+    if not web_user_id:
+        return web.Response(status=400, text=json.dumps({"error": "user_id required"}),
+                            content_type="application/json", headers=cors)
+
+    import random, string
+    code = ''.join(random.choices(string.digits, k=6))
+    link_codes[code] = {
+        "web_user_id": int(web_user_id),
+        "verified":    False,
+        "telegram_id": None,
+        "created_at":  datetime.utcnow(),
+    }
+    logger.info(f"Link code {code} created for web_user_id={web_user_id}")
+    return web.Response(
+        text=json.dumps({"code": code}),
+        status=200, content_type="application/json", headers=cors,
+    )
+
+
+async def api_auth_link_status(request: web.Request) -> web.Response:
+    """GET /api/auth/link-status/{code} — poll for link completion"""
+    cors = _get_cors_headers(request)
+    code = request.match_info.get("code", "")
+    entry = link_codes.get(code)
+    if not entry:
+        return web.Response(
+            text=json.dumps({"verified": False, "error": "not_found"}),
+            status=200, content_type="application/json", headers=cors,
+        )
+    return web.Response(
+        text=json.dumps({
+            "verified":    entry.get("verified", False),
+            "telegram_id": entry.get("telegram_id"),
+        }),
+        status=200, content_type="application/json", headers=cors,
+    )
+
+
 async def api_auth_request(request: web.Request) -> web.Response:
     """POST /api/auth/request — регистрирует 6-значный код для web-авторизации"""
     try:
@@ -1206,6 +1255,8 @@ async def start_web_server():
         app.router.add_post('/api/auth/social', api_auth_social)
         app.router.add_post('/api/auth/request', api_auth_request)
         app.router.add_get('/api/auth/status/{code}', api_auth_status)
+        app.router.add_post('/api/auth/link-request', api_auth_link_request)
+        app.router.add_get('/api/auth/link-status/{code}', api_auth_link_status)
 
         runner = web.AppRunner(app)
         await runner.setup()

@@ -362,3 +362,92 @@ async def handle_web_auth_code(message: Message):
     entry['photo_url'] = None
     logger.info(f'Web auth code {code} verified for user_id={user.id}')
     await message.answer("✅ Вы успешно вошли в Symed!\n\nВернитесь на сайт — страница автоматически обновится.")
+
+
+@router.message(Command("link"))
+async def cmd_link(message: Message) -> None:
+    """Привязка Telegram-аккаунта к веб-профилю: /link КОД"""
+    from bot.shared import link_codes
+    from database.connection import supabase_client
+    import json
+
+    parts = (message.text or "").strip().split()
+    if len(parts) < 2:
+        await message.answer(
+            "🔗 <b>Привязка аккаунта</b>\n\n"
+            "Откройте Symed → Профиль → <b>Подключить Telegram</b>, "
+            "получите код и введите:\n<code>/link КОД</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    code = parts[1].strip()
+    entry = link_codes.get(code)
+
+    if not entry:
+        await message.answer("❌ Код не найден или истёк.\n\nОткройте Symed → Профиль → Подключить Telegram.")
+        return
+
+    from datetime import datetime as _dt
+    age = (_dt.utcnow() - entry["created_at"]).total_seconds()
+    if age > 600:
+        link_codes.pop(code, None)
+        await message.answer("⏰ Код истёк (10 минут).\n\nПолучите новый код в Symed.")
+        return
+
+    if entry.get("verified"):
+        await message.answer("✅ Этот код уже использован.")
+        return
+
+    tg_user    = message.from_user
+    tg_id      = tg_user.id
+    web_id     = entry["web_user_id"]
+
+    try:
+        # Load both profiles
+        tg_resp  = supabase_client.table("user_profiles").select("*").eq("user_id", tg_id).limit(1).execute()
+        web_resp = supabase_client.table("user_profiles").select("*").eq("user_id", web_id).limit(1).execute()
+
+        tg_profile  = tg_resp.data[0]  if tg_resp.data  else {}
+        web_profile = web_resp.data[0] if web_resp.data else {}
+
+        # Merge: copy non-null Telegram fields into web profile (don't overwrite existing)
+        merge_fields = ["birthdate", "gender", "height", "weight", "phone",
+                        "chronic_diseases", "drug_allergies", "smoking",
+                        "hereditary", "physical_activity"]
+        update_web = {"linked_telegram_id": str(tg_id)}
+        for field in merge_fields:
+            tg_val  = tg_profile.get(field)
+            web_val = web_profile.get(field)
+            if tg_val and not web_val:
+                update_web[field] = tg_val
+
+        # Also merge full_name if web is missing
+        if not web_profile.get("full_name") and tg_profile.get("full_name"):
+            update_web["full_name"] = tg_profile["full_name"]
+
+        # Update web profile
+        supabase_client.table("user_profiles").upsert(
+            {"user_id": web_id, **update_web}, on_conflict="user_id"
+        ).execute()
+
+        # Update telegram profile: store linked_web_id
+        supabase_client.table("user_profiles").upsert(
+            {"user_id": tg_id, "linked_web_id": str(web_id)}, on_conflict="user_id"
+        ).execute()
+
+        entry["verified"]    = True
+        entry["telegram_id"] = tg_id
+        link_codes[code]     = entry
+
+        await message.answer(
+            "✅ <b>Аккаунты успешно связаны!</b>\n\n"
+            "Теперь ваши данные в Telegram и на сайте Symed синхронизированы. "
+            "История консультаций и профиль — общие.",
+            parse_mode="HTML"
+        )
+        logger.info(f"Account linked: telegram_id={tg_id} <-> web_id={web_id}")
+
+    except Exception as e:
+        logger.error(f"Link error: {e}", exc_info=True)
+        await message.answer("⚠️ Ошибка при связывании. Попробуйте ещё раз.")
