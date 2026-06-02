@@ -79,6 +79,11 @@ def _is_rate_limited(request: web.Request) -> bool:
     timestamps = _rate_counters[ip]
     # Remove old timestamps
     _rate_counters[ip] = [t for t in timestamps if t > window_start]
+    # Evict stale IPs to prevent unbounded memory growth
+    if len(_rate_counters) > 10_000:
+        stale_ips = [k for k, v in _rate_counters.items() if not v or v[-1] < window_start]
+        for k in stale_ips[:5_000]:
+            del _rate_counters[k]
     if len(_rate_counters[ip]) >= _RATE_LIMIT:
         return True
     _rate_counters[ip].append(now)
@@ -118,11 +123,11 @@ CORS_HEADERS = {
 
 
 def json_response(data: dict, status: int = 200) -> web.Response:
+    # CORS headers are added by cors_middleware — do not set static headers here
     return web.Response(
         text=json.dumps(data, ensure_ascii=False),
         status=status,
         content_type="application/json",
-        headers=CORS_HEADERS,
     )
 
 

@@ -324,12 +324,6 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient
     # """
 
     medical_preamble = _build_medical_preamble(user_profile)
-    lang_instruction = (
-        "Отвечай ТОЛЬКО на русском языке."
-        if language == "ru"
-        else "Faqat o'zbek tilida (lotin alifbosi) javob ber."
-        f" {lang_instruction}"
-    )
     lang_instruction_final = (
         "Все ответы ТОЛЬКО на русском языке."
         if language == "ru"
@@ -348,6 +342,7 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient
         f"6. Вопросы строго о кластере: {primary_cluster}.\n"
         f"{skip_instruction}\n"
         f"{history_block}"
+        f"{lang_instruction_final}\n"
         f"Ответь ТОЛЬКО валидным JSON массивом без markdown, без ```json, без пояснений. "
         f'Пример: [{{"question": "Где именно болит?", "options": ["В груди", "В животе", "В голове", "Ничего из этого"]}}]'
     )
