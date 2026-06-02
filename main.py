@@ -908,6 +908,34 @@ async def _check_anamnesis_fields():
             )
 
 
+async def api_consultation_feedback(request: web.Request) -> web.Response:
+    """POST /api/consultation/feedback — сохраняет оценку консультации (good/bad)"""
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({"error": "Invalid JSON"}, status=400)
+
+    consultation_id = body.get("consultation_id")
+    rating = body.get("rating")  # "good" | "bad"
+
+    if not consultation_id or rating not in ("good", "bad"):
+        return json_response({"error": "consultation_id and rating (good|bad) required"}, status=400)
+
+    try:
+        await run_query(
+            lambda: supabase_client.table("consultations")
+            .update({"rating": rating})
+            .eq("id", consultation_id)
+            .execute()
+        )
+        logger.info(f"Feedback saved: consultation_id={consultation_id} rating={rating}")
+        return json_response({"status": "ok"})
+    except Exception as e:
+        logger.error(f"Feedback error: {e}", exc_info=True)
+        return json_response({"error": str(e)}, status=500)
+
+
+
 async def api_consultations_get(request: web.Request) -> web.Response:
     """GET /api/consultations/{user_id} — история консультаций для Mini App."""
     user_id = request.match_info.get('user_id')
@@ -1245,6 +1273,7 @@ async def start_web_server():
         app.router.add_post('/api/consultation/answer', api_consultation_answer)
         app.router.add_post('/api/consultation/duration', api_consultation_duration)
         app.router.add_post('/api/consultation/result', api_consultation_result)
+        app.router.add_post('/api/consultation/feedback', api_consultation_feedback)
         app.router.add_get('/api/consultations/{user_id}', api_consultations_get)
         app.router.add_get('/api/medications/{user_id}', api_medications_get)
         app.router.add_post('/api/medications/{user_id}', api_medications_post)
