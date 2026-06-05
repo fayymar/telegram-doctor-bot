@@ -16,7 +16,7 @@ from utils.logger import setup_logger
 logger = setup_logger(__name__)
 router = Router()
 
-WEBAPP_URL = "https://sympto-med-app.vercel.app"
+WEBAPP_URL = "https://symed-web.vercel.app"
 
 
 async def set_webapp_menu_button(bot, chat_id: int) -> None:
