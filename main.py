@@ -141,7 +141,20 @@ async def cors_middleware(request: web.Request, handler):
     cors_headers = _get_cors_headers(request)
     if request.method == "OPTIONS":
         return web.Response(status=204, headers=cors_headers)
-    response = await handler(request)
+    try:
+        response = await handler(request)
+    except web.HTTPException as e:
+        # aiohttp's own HTTP errors (404, etc.) — still attach CORS headers
+        for key, value in cors_headers.items():
+            e.headers[key] = value
+        raise
+    except Exception as e:
+        logger.error(f"Unhandled exception in {request.path}: {e}", exc_info=True)
+        response = web.Response(
+            text=json.dumps({"error": "Internal server error"}, ensure_ascii=False),
+            status=500,
+            content_type="application/json",
+        )
     for key, value in cors_headers.items():
         response.headers[key] = value
     return response
@@ -189,12 +202,20 @@ async def api_consultation_start(request: web.Request) -> web.Response:
     logger.info(f"Health metrics for user_id={user_id}: has_data={health_metrics.get('has_any_data')}")
 
     # Шаг 1: Красные флаги (с учётом метрик)
-    red_flag_result = check_red_flags(symptoms, health_metrics=health_metrics)
+    try:
+        red_flag_result = check_red_flags(symptoms, health_metrics=health_metrics)
+    except Exception as e:
+        logger.error(f"check_red_flags failed: {e}", exc_info=True)
+        return json_response({"error": "AI service temporarily unavailable"}, status=503)
     red_flag = red_flag_result.get("red_flag", False)
     needs_fresh_metrics = red_flag_result.get("needs_fresh_metrics", [])
 
     # Шаг 2: Генерация уточняющих вопросов
-    questions = parse_and_generate_questions(symptoms, user_profile, patient_history)
+    try:
+        questions = parse_and_generate_questions(symptoms, user_profile, patient_history)
+    except Exception as e:
+        logger.error(f"parse_and_generate_questions failed: {e}", exc_info=True)
+        return json_response({"error": "AI service temporarily unavailable"}, status=503)
 
     session_id = str(uuid.uuid4())
     consultation_sessions[session_id] = {
