@@ -77,6 +77,61 @@ def _format_birthdate_and_age(birthdate_value):
         return str(birthdate_value), None
 
 
+# Хронические заболевания/наследственность, которые считаются серьёзными факторами риска
+_SEVERE_CONDITIONS = {
+    "онкология", "рак", "диабет", "сахарный диабет", "инфаркт", "инсульт",
+    "гепатит", "цирроз", "почечная недостаточность", "сердечная недостаточность",
+    "астма", "хроническая обструктивная болезнь лёгких", "хобл",
+}
+# Более лёгкие хронические состояния — не "отлично", но и не тревожно
+_MILD_CONDITIONS = {
+    "гипертония", "повышенное давление", "гастрит", "аллергия", "мигрень",
+    "остеохондроз", "варикоз",
+}
+
+
+def _assess_health_status(chronic_list, hereditary_list, smoking_value) -> tuple[str, str]:
+    """
+    Простая rule-based оценка состояния здоровья по данным анамнеза.
+    Возвращает (уровень, текст_для_пользователя).
+    Уровень: 'good' | 'fair' | 'attention'
+    """
+    chronic_list = chronic_list or []
+    hereditary_list = hereditary_list or []
+    smoking_value = (smoking_value or "no").lower()
+
+    chronic_lower = {str(c).lower().strip() for c in chronic_list}
+    hereditary_lower = {str(h).lower().strip() for h in hereditary_list}
+
+    has_severe = any(
+        any(cond in item for cond in _SEVERE_CONDITIONS)
+        for item in chronic_lower
+    )
+    has_mild = any(
+        any(cond in item for cond in _MILD_CONDITIONS)
+        for item in chronic_lower
+    )
+    is_smoker = smoking_value == "yes"
+    has_hereditary_risk = len(hereditary_lower) > 0 and hereditary_lower != {""}
+
+    risk_score = 0
+    if has_severe:
+        risk_score += 3
+    if has_mild:
+        risk_score += 1
+    if is_smoker:
+        risk_score += 2
+    if has_hereditary_risk:
+        risk_score += 1
+
+    if risk_score == 0:
+        return "good", "отличное"
+    elif risk_score <= 2:
+        return "fair", "хорошее, но есть на что обратить внимание"
+    else:
+        return "attention", "требует особого внимания — учтём это в рекомендациях"
+
+
 _OPTIONAL_PROFILE_COLUMNS = {
     "language", "chronic_diseases", "drug_allergies", "smoking", "hereditary",
 }
@@ -500,9 +555,18 @@ async def _save_and_finish_registration(message: Message, state: FSMContext):
         }
         _upsert_profile_with_fallback(profile_data)
         logger.info("Profile saved via _save_and_finish | user_id=%s", message.from_user.id)
+
+        full_name = data.get("full_name", "").strip()
+        first_name = full_name.split()[0] if full_name else "Пользователь"
+        _, age = _format_birthdate_and_age(data.get("birthdate"))
+        age_str = f", возраст {age} лет" if age is not None else ""
+        _, health_text = _assess_health_status(chronic_list, hereditary_list, smoking_value)
+
         await message.answer(
-            "🎉 *Профиль сохранён!*\n\n"
-            "Теперь диагностика будет учитывать ваши данные для более точных рекомендаций.",
+            f"🎉 *Профиль сохранён!*\n\n"
+            f"{full_name or first_name}{age_str}, состояние здоровья — {health_text}!\n\n"
+            f"Теперь диагностика будет учитывать ваши данные для более точных рекомендаций.\n\n"
+            f"👉 А теперь попробуйте проверить симптомы в разделе «Новая консультация»",
             reply_markup=get_main_menu(),
             parse_mode="Markdown",
         )
@@ -1304,9 +1368,18 @@ async def _save_registration_with_anamnesis(
         }
         _upsert_profile_with_fallback(profile_data)
         logger.info("Profile+anamnesis saved user_id=%s", message.chat.id)
+
+        full_name = data.get("full_name", "").strip()
+        first_name = full_name.split()[0] if full_name else "Пользователь"
+        _, age = _format_birthdate_and_age(data.get("birthdate"))
+        age_str = f", возраст {age} лет" if age is not None else ""
+        _, health_text = _assess_health_status(chronic_list, hereditary_list, smoking_value)
+
         await message.answer(
-            "🎉 *Профиль и медицинская история сохранены!*\n\n"
-            "Диагностика будет учитывать ваши данные.",
+            f"🎉 *Профиль и медицинская история сохранены!*\n\n"
+            f"{full_name or first_name}{age_str}, состояние здоровья — {health_text}!\n\n"
+            f"Диагностика будет учитывать ваши данные.\n\n"
+            f"👉 А теперь попробуйте проверить симптомы в разделе «Новая консультация»",
             reply_markup=get_main_menu(),
             parse_mode="Markdown",
         )
