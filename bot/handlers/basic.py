@@ -10,7 +10,7 @@ from aiogram.fsm.context import FSMContext
 
 from bot.keyboards import get_main_menu, get_clinics_specialists_submenu
 from bot.states import Registration
-from database.connection import supabase_client
+from database.connection import supabase_client, run_query
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -124,8 +124,8 @@ async def cmd_start(message: Message, state: FSMContext):
         web_id = entry["web_user_id"]
 
         try:
-            tg_resp  = _sb.table("user_profiles").select("*").eq("user_id", tg_id).limit(1).execute()
-            web_resp = _sb.table("user_profiles").select("*").eq("user_id", web_id).limit(1).execute()
+            tg_resp  = await run_query(lambda: _sb.table("user_profiles").select("*").eq("user_id", tg_id).limit(1).execute())
+            web_resp = await run_query(lambda: _sb.table("user_profiles").select("*").eq("user_id", web_id).limit(1).execute())
             tg_profile  = tg_resp.data[0]  if tg_resp.data  else {}
             web_profile = web_resp.data[0] if web_resp.data else {}
 
@@ -139,8 +139,8 @@ async def cmd_start(message: Message, state: FSMContext):
             if not web_profile.get("full_name") and tg_profile.get("full_name"):
                 update_web["full_name"] = tg_profile["full_name"]
 
-            _sb.table("user_profiles").upsert({"user_id": web_id, **update_web}, on_conflict="user_id").execute()
-            _sb.table("user_profiles").upsert({"user_id": tg_id, "linked_web_id": str(web_id)}, on_conflict="user_id").execute()
+            await run_query(lambda: _sb.table("user_profiles").upsert({"user_id": web_id, **update_web}, on_conflict="user_id").execute())
+            await run_query(lambda: _sb.table("user_profiles").upsert({"user_id": tg_id, "linked_web_id": str(web_id)}, on_conflict="user_id").execute())
 
             entry["verified"]    = True
             entry["telegram_id"] = tg_id
@@ -171,7 +171,7 @@ async def start_telegram(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     await callback.message.delete()
     try:
-        response = supabase_client.table('user_profiles').select('user_id').eq('user_id', user_id).limit(1).execute()
+        response = await run_query(lambda: supabase_client.table('user_profiles').select('user_id').eq('user_id', user_id).limit(1).execute())
         if response.data:
             try:
                 await set_webapp_menu_button(callback.bot, callback.message.chat.id)
@@ -307,9 +307,9 @@ async def cmd_delete_data(message: Message):
 async def confirm_delete(callback: CallbackQuery):
     user_id = callback.from_user.id
     try:
-        supabase_client.table("user_profiles").delete().eq("user_id", user_id).execute()
-        supabase_client.table("health_metrics").delete().eq("user_id", user_id).execute()
-        supabase_client.table("consultations").delete().eq("user_id", user_id).execute()
+        await run_query(lambda: supabase_client.table("user_profiles").delete().eq("user_id", user_id).execute())
+        await run_query(lambda: supabase_client.table("health_metrics").delete().eq("user_id", user_id).execute())
+        await run_query(lambda: supabase_client.table("consultations").delete().eq("user_id", user_id).execute())
         logger.info(f"Deleted all data for user {user_id}")
         await callback.message.edit_text("✅ Все данные удалены.")
     except Exception as e:
@@ -329,9 +329,9 @@ async def on_user_blocked_bot(update: ChatMemberUpdated):
     if update.new_chat_member.status == "kicked":
         user_id = update.from_user.id
         try:
-            supabase_client.table("user_profiles").delete().eq("user_id", user_id).execute()
-            supabase_client.table("health_metrics").delete().eq("user_id", user_id).execute()
-            supabase_client.table("consultations").delete().eq("user_id", user_id).execute()
+            await run_query(lambda: supabase_client.table("user_profiles").delete().eq("user_id", user_id).execute())
+            await run_query(lambda: supabase_client.table("health_metrics").delete().eq("user_id", user_id).execute())
+            await run_query(lambda: supabase_client.table("consultations").delete().eq("user_id", user_id).execute())
             logger.info(f"Deleted all data for user {user_id} (bot blocked)")
         except Exception as e:
             logger.error(f"Error deleting user data for {user_id}: {e}")
@@ -341,10 +341,10 @@ async def on_user_blocked_bot(update: ChatMemberUpdated):
 async def cmd_profile(message: Message):
     user_id = message.from_user.id
     try:
-        resp = supabase_client.table("user_profiles").select(
+        resp = await run_query(lambda: supabase_client.table("user_profiles").select(
             "full_name, phone, birthdate, gender, height, weight, "
             "chronic_diseases, drug_allergies, smoking, hereditary"
-        ).eq("user_id", user_id).limit(1).execute()
+        ).eq("user_id", user_id).limit(1).execute())
         rows = resp.data or []
         if not rows:
             await message.answer("Профиль не заполнен. Отправьте /start чтобы пройти регистрацию, или откройте приложение Symed.")
@@ -428,7 +428,7 @@ async def handle_web_auth_code(message: Message):
 async def cmd_link(message: Message) -> None:
     """Привязка Telegram-аккаунта к веб-профилю: /link КОД"""
     from bot.shared import link_codes
-    from database.connection import supabase_client
+    from database.connection import supabase_client, run_query
     import json
 
     parts = (message.text or "").strip().split()
@@ -465,8 +465,8 @@ async def cmd_link(message: Message) -> None:
 
     try:
         # Load both profiles
-        tg_resp  = supabase_client.table("user_profiles").select("*").eq("user_id", tg_id).limit(1).execute()
-        web_resp = supabase_client.table("user_profiles").select("*").eq("user_id", web_id).limit(1).execute()
+        tg_resp  = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", tg_id).limit(1).execute())
+        web_resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", web_id).limit(1).execute())
 
         tg_profile  = tg_resp.data[0]  if tg_resp.data  else {}
         web_profile = web_resp.data[0] if web_resp.data else {}
@@ -487,14 +487,14 @@ async def cmd_link(message: Message) -> None:
             update_web["full_name"] = tg_profile["full_name"]
 
         # Update web profile
-        supabase_client.table("user_profiles").upsert(
+        await run_query(lambda: supabase_client.table("user_profiles").upsert(
             {"user_id": web_id, **update_web}, on_conflict="user_id"
-        ).execute()
+        ).execute())
 
         # Update telegram profile: store linked_web_id
-        supabase_client.table("user_profiles").upsert(
+        await run_query(lambda: supabase_client.table("user_profiles").upsert(
             {"user_id": tg_id, "linked_web_id": str(web_id)}, on_conflict="user_id"
-        ).execute()
+        ).execute())
 
         entry["verified"]    = True
         entry["telegram_id"] = tg_id
