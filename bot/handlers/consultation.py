@@ -17,7 +17,7 @@ from services.consultation_agent import (
     get_final_recommendation,
     get_patient_history,
 )
-from database.connection import supabase_client
+from database.connection import supabase_client, run_query
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -57,14 +57,14 @@ async def _save_consultation(user_id: int, all_data: dict, result: dict):
             + [{"question": "Как давно появились симптомы?", "answer": all_data.get("duration", "")}]
             + all_data.get("anamnesis_answers", [])
         )
-        supabase_client.table("consultations").insert({
+        await run_query(lambda: supabase_client.table("consultations").insert({
             "user_id": user_id,
             "symptoms": json.dumps({"history": history}, ensure_ascii=False),
             "questions_answers": json.dumps(history, ensure_ascii=False),
             "recommended_doctor": top.get("name", "Терапевт"),
             "urgency_level": result.get("urgency", "medium"),
             "created_at": datetime.now().isoformat(),
-        }).execute()
+        }).execute())
     except Exception as e:
         logger.error(f"DB error in _save_consultation: {e}", exc_info=True)
 
@@ -92,9 +92,9 @@ def _format_result(result: dict, duration: str) -> str:
 @router.message(F.text == "🩺 Новая консультация")
 async def start_consultation(message: Message, state: FSMContext):
     try:
-        response = supabase_client.table("user_profiles").select("user_id").eq(
+        response = await run_query(lambda: supabase_client.table("user_profiles").select("user_id").eq(
             "user_id", message.from_user.id
-        ).execute()
+        ).execute())
         if not response.data:
             await message.answer(
                 "❌ Пожалуйста, сначала зарегистрируйтесь\nИспользуйте /start"
@@ -157,9 +157,9 @@ async def process_symptoms(message: Message, state: FSMContext):
     # Получаем профиль пользователя
     user_profile = {}
     try:
-        resp = supabase_client.table("user_profiles").select("*").eq(
+        resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq(
             "user_id", message.from_user.id
-        ).execute()
+        ).execute())
         if resp.data:
             user_profile = resp.data[0]
     except Exception as e:
@@ -430,10 +430,9 @@ async def handle_feedback(call: CallbackQuery):
 
     try:
         # Сохраняем фидбэк в Supabase
-        from database.connection import supabase_client
-        supabase_client.table("consultations").update({
+        await run_query(lambda: supabase_client.table("consultations").update({
             "feedback": verdict,
-        }).eq("user_id", int(user_id)).order("created_at", desc=True).limit(1).execute()
+        }).eq("user_id", int(user_id)).order("created_at", desc=True).limit(1).execute())
     except Exception as e:
         logger.warning(f"Feedback save error: {e}")
 
