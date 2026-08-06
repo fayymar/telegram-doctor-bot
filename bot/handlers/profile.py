@@ -19,7 +19,7 @@ from bot.keyboards import (
     get_step_keyboard_with_back,
     get_phone_keyboard_with_back,
 )
-from database.connection import supabase_client
+from database.connection import supabase_client, run_query
 from postgrest.exceptions import APIError
 from services.phone_formatter import format_phone_number, get_phone_info
 from utils.logger import setup_logger
@@ -215,13 +215,15 @@ def build_smoking_reply_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def _upsert_profile_with_fallback(profile_data: dict):
+async def _upsert_profile_with_fallback(profile_data: dict):
     """Сохраняет профиль; при ошибке схемы повторяет без необязательных колонок."""
     try:
-        return supabase_client.table("user_profiles").upsert(
-            profile_data,
-            on_conflict="user_id"
-        ).execute()
+        return await run_query(
+            lambda: supabase_client.table("user_profiles").upsert(
+                profile_data,
+                on_conflict="user_id"
+            ).execute()
+        )
     except APIError as e:
         error_text = str(e).lower()
         if "column" not in error_text and "schema cache" not in error_text:
@@ -229,10 +231,12 @@ def _upsert_profile_with_fallback(profile_data: dict):
         logger.warning(f"Schema error, retrying without optional columns: {e}")
         fallback_data = {k: v for k, v in profile_data.items()
                         if k not in _OPTIONAL_PROFILE_COLUMNS}
-        return supabase_client.table("user_profiles").upsert(
-            fallback_data,
-            on_conflict="user_id"
-        ).execute()
+        return await run_query(
+            lambda: supabase_client.table("user_profiles").upsert(
+                fallback_data,
+                on_conflict="user_id"
+            ).execute()
+        )
 
 
 async def process_phone_input(message: Message, phone_input: str) -> tuple[bool, str]:
@@ -327,10 +331,10 @@ async def process_language_choice(message: Message, state: FSMContext):
 async def show_profile(message: Message):
     """Показать профиль пользователя"""
     try:
-        response = supabase_client.table("user_profiles").select(
+        response = await run_query(lambda: supabase_client.table("user_profiles").select(
             "full_name, phone, birthdate, gender, height, weight, "
             "chronic_diseases, drug_allergies, smoking, hereditary, language"
-        ).eq("user_id", message.from_user.id).execute()
+        ).eq("user_id", message.from_user.id).execute())
 
         if not response.data:
             await message.answer(
@@ -395,9 +399,9 @@ async def show_bmi(message: Message):
     try:
         from utils.health_calculator import format_bmi_info
 
-        response = supabase_client.table("user_profiles").select(
+        response = await run_query(lambda: supabase_client.table("user_profiles").select(
             "height, weight, gender"
-        ).eq("user_id", message.from_user.id).execute()
+        ).eq("user_id", message.from_user.id).execute())
 
         if not response.data:
             await message.answer(
@@ -553,7 +557,7 @@ async def _save_and_finish_registration(message: Message, state: FSMContext):
             "drug_allergies": allergies_str,
             "smoking": smoking_value,
         }
-        _upsert_profile_with_fallback(profile_data)
+        await _upsert_profile_with_fallback(profile_data)
         logger.info("Profile saved via _save_and_finish | user_id=%s", message.from_user.id)
 
         full_name = data.get("full_name", "").strip()
@@ -1319,13 +1323,13 @@ async def cb_smoking(call: CallbackQuery, state: FSMContext):
 
     if is_update:
         try:
-            supabase_client.table("user_profiles").update({
+            await run_query(lambda: supabase_client.table("user_profiles").update({
                 "chronic_diseases": chronic_list,
                 "hereditary":       hereditary_list,
                 "drug_allergies":   allergies_str,
                 "smoking":          smoking_value,
                 "updated_at":       datetime.now().isoformat(),
-            }).eq("user_id", call.from_user.id).execute()
+            }).eq("user_id", call.from_user.id).execute())
             await call.message.answer(
                 "✅ *Медицинская история обновлена!*",
                 reply_markup=get_main_menu(),
@@ -1366,7 +1370,7 @@ async def _save_registration_with_anamnesis(
             "drug_allergies":   allergies_str,
             "smoking":          smoking_value,
         }
-        _upsert_profile_with_fallback(profile_data)
+        await _upsert_profile_with_fallback(profile_data)
         logger.info("Profile+anamnesis saved user_id=%s", message.chat.id)
 
         full_name = data.get("full_name", "").strip()
@@ -1403,9 +1407,9 @@ async def update_anamnesis_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
     pre = {"is_anamnesis_update": True, "selected_chronic": [], "selected_hereditary": [], "selected_allergies": []}
     try:
-        result = supabase_client.table("user_profiles").select(
+        result = await run_query(lambda: supabase_client.table("user_profiles").select(
             "chronic_diseases, hereditary, drug_allergies, smoking"
-        ).eq("user_id", user_id).limit(1).execute()
+        ).eq("user_id", user_id).limit(1).execute())
         if result.data:
             p = result.data[0]
             pre["selected_chronic"] = p.get("chronic_diseases") or []
@@ -1522,10 +1526,10 @@ async def edit_full_name(message: Message, state: FSMContext):
         return
 
     try:
-        supabase_client.table("user_profiles").update({
+        await run_query(lambda: supabase_client.table("user_profiles").update({
             "full_name": full_name,
             "updated_at": datetime.now().isoformat(),
-        }).eq("user_id", message.from_user.id).execute()
+        }).eq("user_id", message.from_user.id).execute())
 
         await message.answer(f"✅ ФИО обновлено: {full_name}")
         await message.answer("Что ещё хотите изменить?", reply_markup=get_edit_profile_menu())
@@ -1550,10 +1554,10 @@ async def edit_phone(message: Message, state: FSMContext):
     try:
         phone_info = get_phone_info(phone_input)
 
-        supabase_client.table("user_profiles").update({
+        await run_query(lambda: supabase_client.table("user_profiles").update({
             "phone": formatted_phone,
             "updated_at": datetime.now().isoformat(),
-        }).eq("user_id", message.from_user.id).execute()
+        }).eq("user_id", message.from_user.id).execute())
 
         info_text = "✅ *Телефон обновлён:*\n\n"
         info_text += f"📱 {formatted_phone}\n"
@@ -1581,10 +1585,10 @@ async def edit_birthdate(message: Message, state: FSMContext):
         return
 
     try:
-        supabase_client.table("user_profiles").update({
+        await run_query(lambda: supabase_client.table("user_profiles").update({
             "birthdate": birthdate.date().isoformat(),
             "updated_at": datetime.now().isoformat(),
-        }).eq("user_id", message.from_user.id).execute()
+        }).eq("user_id", message.from_user.id).execute())
 
         if value.isdigit():
             text = f"✅ Возраст обновлён: {age} лет"
@@ -1605,10 +1609,10 @@ async def edit_gender(message: Message, state: FSMContext):
     gender = GENDER_TEXT_TO_CODE[message.text]
 
     try:
-        supabase_client.table("user_profiles").update({
+        await run_query(lambda: supabase_client.table("user_profiles").update({
             "gender": gender,
             "updated_at": datetime.now().isoformat(),
-        }).eq("user_id", message.from_user.id).execute()
+        }).eq("user_id", message.from_user.id).execute())
 
         await message.answer(
             f"✅ Пол обновлён: {message.text}",
@@ -1640,10 +1644,10 @@ async def edit_height(message: Message, state: FSMContext):
         return
 
     try:
-        supabase_client.table("user_profiles").update({
+        await run_query(lambda: supabase_client.table("user_profiles").update({
             "height": height,
             "updated_at": datetime.now().isoformat(),
-        }).eq("user_id", message.from_user.id).execute()
+        }).eq("user_id", message.from_user.id).execute())
 
         await message.answer(f"✅ Рост обновлён: {height} см")
         await message.answer("Что ещё хотите изменить?", reply_markup=get_edit_profile_menu())
@@ -1664,10 +1668,10 @@ async def edit_weight(message: Message, state: FSMContext):
         return
 
     try:
-        supabase_client.table("user_profiles").update({
+        await run_query(lambda: supabase_client.table("user_profiles").update({
             "weight": weight,
             "updated_at": datetime.now().isoformat(),
-        }).eq("user_id", message.from_user.id).execute()
+        }).eq("user_id", message.from_user.id).execute())
 
         await message.answer(f"✅ Вес обновлён: {weight} кг")
         await message.answer("Что ещё хотите изменить?", reply_markup=get_edit_profile_menu())
