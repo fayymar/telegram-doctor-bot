@@ -1021,8 +1021,8 @@ async def _validate_medical_input(text: str) -> tuple[bool, str]:
 YES: гипертония, астма, пенициллин, аспирин, диабет, псориаз, лактоза
 NO: привет, тест, 123, рецепт пирога, непонятный текст''')
     try:
-        from services.ai_service import call_model
-        resp = call_model(prompt, max_tokens=5)
+        from services.ai_service import call_model_async
+        resp = await call_model_async(prompt, max_tokens=5)
         return ("YES" in resp.upper()), ""
     except Exception:
         return True, ""  # При ошибке AI пропускаем

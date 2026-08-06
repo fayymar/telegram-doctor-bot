@@ -191,7 +191,7 @@ def _format_metrics_for_prompt(metrics: dict) -> str:
 
 
 
-def validate_symptoms(symptoms: str, language: str = "ru") -> tuple[bool, str]:
+async def validate_symptoms(symptoms: str, language: str = "ru") -> tuple[bool, str]:
     """
     Проверяет что пользователь описал симптомы здоровья, а не что-то постороннее.
     Использует Claude Haiku с чётким промптом.
@@ -227,8 +227,8 @@ NO — еда, техника, погода, цены, тест, или что �
 Примеры NO: куриные сердечки, давление в шинах, температура духовки, повышение цен.''')
 
     try:
-        from services.ai_service import call_model
-        resp = call_model(prompt, max_tokens=5).strip().upper()
+        from services.ai_service import call_model_async
+        resp = (await call_model_async(prompt, max_tokens=5)).strip().upper()
         if "YES" not in resp:
             return False, err_msg
         return True, ""
@@ -264,7 +264,7 @@ def check_red_flags(symptoms_text: str, health_metrics: Optional[dict] = None) -
         return {"red_flag": False, "needs_fresh_metrics": []}
 
 
-def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient_history: str = "", language: str = "ru") -> list:
+async def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient_history: str = "", language: str = "ru") -> list:
     """
     Шаг 2: Классифицирует симптомы и генерирует через Groq уточняющие вопросы (1-3).
     Учитывает возраст и пол из user_profile.
@@ -350,7 +350,7 @@ def parse_and_generate_questions(symptoms_text: str, user_profile: dict, patient
     user_message = f"Симптомы пациента: {symptoms_text}"
 
     try:
-        raw = ai_service._call_ai(system_prompt, user_message, temperature=0.3, max_tokens=800)
+        raw = await ai_service._call_ai_async(system_prompt, user_message, temperature=0.3, max_tokens=800)
         logger.info(f"parse_and_generate_questions raw response: {raw}")
         cleaned = raw.strip()
         if not cleaned.startswith('['):
@@ -427,7 +427,7 @@ def get_duration_question() -> dict:
     }
 
 
-def get_anamnesis_questions(symptoms_text: str) -> list:
+async def get_anamnesis_questions(symptoms_text: str) -> list:
     """
     Шаг 4: Генерирует через Groq 1-2 анамнестических вопроса, релевантных симптомам.
     Возвращает: [{"question": "...", "options": [...]}]
@@ -451,7 +451,7 @@ def get_anamnesis_questions(symptoms_text: str) -> list:
     user_message = f"Симптомы пациента: {symptoms_text}"
 
     try:
-        raw = ai_service._call_ai(system_prompt, user_message, temperature=0.3, max_tokens=400)
+        raw = await ai_service._call_ai_async(system_prompt, user_message, temperature=0.3, max_tokens=400)
         cleaned = ai_service._extract_json_block(raw)
         questions = safe_parse_json_array(cleaned, default=[])
 
@@ -520,7 +520,7 @@ def get_patient_history(user_id: int, supabase_client) -> str:
         return ""
 
 
-def get_final_recommendation(
+async def get_final_recommendation(
     all_data: dict,
     user_profile: dict,
     patient_history: str = "",
@@ -588,7 +588,7 @@ def get_final_recommendation(
     )
 
     try:
-        raw = ai_service._call_ai(system_prompt, "Определи специалистов.", temperature=0.1, max_tokens=700)
+        raw = await ai_service._call_ai_async(system_prompt, "Определи специалистов.", temperature=0.1, max_tokens=700)
         cleaned = ai_service._extract_json_block(raw)
         from utils.json_parser import safe_parse_json_object
         parsed = safe_parse_json_object(cleaned, default={})

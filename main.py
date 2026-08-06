@@ -212,7 +212,7 @@ async def api_consultation_start(request: web.Request) -> web.Response:
 
     # Шаг 2: Генерация уточняющих вопросов
     try:
-        questions = parse_and_generate_questions(symptoms, user_profile, patient_history)
+        questions = await parse_and_generate_questions(symptoms, user_profile, patient_history)
     except Exception as e:
         logger.error(f"parse_and_generate_questions failed: {e}", exc_info=True)
         return json_response({"error": "AI service temporarily unavailable"}, status=503)
@@ -296,7 +296,7 @@ async def api_consultation_duration(request: web.Request) -> web.Response:
         session["duration"] = duration
 
         # Генерация анамнестических вопросов
-        anamnesis_questions = get_anamnesis_questions(session["symptoms"])
+        anamnesis_questions = await get_anamnesis_questions(session["symptoms"])
         session["anamnesis_questions"] = anamnesis_questions
 
         # Нормализуем ключ: question → text для Mini App
@@ -359,7 +359,7 @@ async def api_consultation_result(request: web.Request) -> web.Response:
             except Exception:
                 pass
 
-        recommendation = get_final_recommendation(
+        recommendation = await get_final_recommendation(
             all_data,
             user_profile,
             health_metrics=session.get("health_metrics"),

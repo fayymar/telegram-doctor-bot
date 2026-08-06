@@ -1,4 +1,6 @@
+import asyncio
 import re
+from functools import partial
 from typing import List
 
 import anthropic
@@ -97,6 +99,23 @@ class AIService:
                 logger.warning(f"Anthropic unavailable ({type(e).__name__}: {e}), switching to Groq")
                 return self._call_groq(system_prompt, user_message, temperature, max_tokens)
             raise
+
+    async def _call_ai_async(
+        self,
+        system_prompt: str,
+        user_message: str,
+        temperature: float = 0.3,
+        max_tokens: int = 1024
+    ) -> str:
+        """
+        Асинхронная обёртка над _call_ai — уводит блокирующий вызов Anthropic/Groq SDK
+        в отдельный поток, чтобы не замораживать event loop сервера на время генерации ответа.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            partial(self._call_ai, system_prompt, user_message, temperature, max_tokens)
+        )
 
     def _extract_json_block(self, text: str) -> str:
         """
@@ -697,3 +716,33 @@ class AIService:
             "urgency": "medium",
             "urgency_reason": "Рекомендуется консультация в ближайшее время."
         }
+
+
+# ── Module-level singleton and helper ────────────────────────────────
+# call_model() is a thin convenience wrapper used by simple one-off YES/NO
+# validation prompts (see consultation_agent.validate_symptoms and
+# bot/handlers/profile.py's allergy/disease validation). It was previously
+# imported but never defined, causing every call site to silently fall back
+# to "always valid" via a caught ImportError.
+_default_ai_service: "AIService | None" = None
+
+
+def _get_default_ai_service() -> "AIService":
+    global _default_ai_service
+    if _default_ai_service is None:
+        _default_ai_service = AIService()
+    return _default_ai_service
+
+
+def call_model(prompt: str, max_tokens: int = 500, temperature: float = 0.1) -> str:
+    """Synchronous single-prompt helper (no separate system prompt)."""
+    service = _get_default_ai_service()
+    return service._call_ai(system_prompt="", user_message=prompt,
+                             temperature=temperature, max_tokens=max_tokens)
+
+
+async def call_model_async(prompt: str, max_tokens: int = 500, temperature: float = 0.1) -> str:
+    """Async version — runs the blocking SDK call in a thread executor."""
+    service = _get_default_ai_service()
+    return await service._call_ai_async(system_prompt="", user_message=prompt,
+                                         temperature=temperature, max_tokens=max_tokens)

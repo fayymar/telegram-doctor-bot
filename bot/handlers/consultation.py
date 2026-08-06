@@ -134,7 +134,7 @@ async def process_symptoms(message: Message, state: FSMContext):
     # Шаг 0: Валидация — это вообще симптомы?
     data = await state.get_data()
     lang = data.get("language", "ru")
-    is_valid, validation_error = validate_symptoms(symptoms_text, lang)
+    is_valid, validation_error = await validate_symptoms(symptoms_text, lang)
     if not is_valid:
         await message.answer(validation_error, reply_markup=get_cancel_keyboard())
         return
@@ -169,7 +169,7 @@ async def process_symptoms(message: Message, state: FSMContext):
     patient_history = get_patient_history(message.from_user.id, supabase_client)
 
     # Шаг 2: Генерируем уточняющие вопросы (фильтруем вопросы о давности — они задаются отдельно)
-    questions_raw = parse_and_generate_questions(symptoms_text, user_profile, patient_history)
+    questions_raw = await parse_and_generate_questions(symptoms_text, user_profile, patient_history)
 
     # None = AI определил что это не медицинский запрос
     if questions_raw is None:
@@ -300,7 +300,7 @@ async def process_duration_callback(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.answer(f"› {duration}")
     preparing_msg = await callback.message.answer("⏳ Подготавливаю вопросы...")
-    anamnesis_qs = get_anamnesis_questions(symptoms)
+    anamnesis_qs = await get_anamnesis_questions(symptoms)
     # Фильтруем вопросы о давности — они уже заданы
     anamnesis_qs = [q for q in anamnesis_qs if not _is_duration_question(q.get("question", ""))]
     await preparing_msg.delete()
@@ -390,7 +390,7 @@ async def _advance_anamnesis(msg, state: FSMContext, questions: list, next_index
     user_id = data.get("user_id")
     patient_history = data.get("patient_history", "")
 
-    result = get_final_recommendation(all_data, user_profile, patient_history)
+    result = await get_final_recommendation(all_data, user_profile, patient_history)
     duration = all_data["duration"]
 
     if user_id:
