@@ -114,13 +114,6 @@ def _get_cors_headers(request: web.Request) -> dict:
         "Vary": "Origin",
     }
 
-# Fallback headers for non-request contexts
-CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "https://sympto-med-app.vercel.app",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-}
-
 
 def json_response(data: dict, status: int = 200) -> web.Response:
     # CORS headers are added by cors_middleware — do not set static headers here
@@ -129,11 +122,6 @@ def json_response(data: dict, status: int = 200) -> web.Response:
         status=status,
         content_type="application/json",
     )
-
-
-async def options_handler(request: web.Request) -> web.Response:
-    """Универсальный обработчик preflight OPTIONS запросов"""
-    return web.Response(status=204, headers=CORS_HEADERS)
 
 
 @web.middleware
@@ -379,8 +367,6 @@ async def api_consultation_result(request: web.Request) -> web.Response:
                 }).execute())
             except Exception as e:
                 logger.error(f"Failed to save consultation to Supabase: {e}", exc_info=True)
-        else:
-            specialists_raw = recommendation.get("specialists", [])
 
         # Нормализуем specialists: match_percent → percentage для Mini App
         specialists_out = [
@@ -1009,12 +995,10 @@ async def api_consultations_get(request: web.Request) -> web.Response:
 
 async def api_auth_social(request: web.Request) -> web.Response:
     """POST /api/auth/social — register or find user from OAuth / email provider"""
-    cors = _get_cors_headers(request)
     try:
         body = await request.json()
     except Exception:
-        return web.Response(status=400, text=json.dumps({"error": "invalid json"}),
-                            content_type="application/json", headers=cors)
+        return json_response({"error": "invalid json"}, status=400)
 
     provider    = str(body.get("provider", "email")).strip()
     email       = str(body.get("email", "")).strip().lower()
@@ -1023,8 +1007,7 @@ async def api_auth_social(request: web.Request) -> web.Response:
     avatar      = body.get("avatar") or None
 
     if not email and not provider_id:
-        return web.Response(status=400, text=json.dumps({"error": "email or provider_id required"}),
-                            content_type="application/json", headers=cors)
+        return json_response({"error": "email or provider_id required"}, status=400)
 
     # Generate a stable integer user_id from provider_id or email
     import hashlib
@@ -1060,41 +1043,34 @@ async def api_auth_social(request: web.Request) -> web.Response:
             is_new = False
             logger.info(f"Social auth: found user_id={user_id} via {provider}")
 
-        return web.Response(
-            text=json.dumps({
-                "id":         user_id,
-                "first_name": first_name,
-                "last_name":  last_name,
-                "username":   None,
-                "photo_url":  avatar,
-                "provider":   provider,
-                "email":      email,
-                "is_new":     is_new,
-                "auth_date":  int(datetime.utcnow().timestamp()),
-            }, ensure_ascii=False),
-            status=200, content_type="application/json", headers=cors,
-        )
+        return json_response({
+            "id":         user_id,
+            "first_name": first_name,
+            "last_name":  last_name,
+            "username":   None,
+            "photo_url":  avatar,
+            "provider":   provider,
+            "email":      email,
+            "is_new":     is_new,
+            "auth_date":  int(datetime.utcnow().timestamp()),
+        })
 
     except Exception as e:
         logger.error(f"Social auth error: {e}", exc_info=True)
-        return web.Response(status=500, text=json.dumps({"error": str(e)}),
-                            content_type="application/json", headers=cors)
+        return json_response({"error": str(e)}, status=500)
 
 
 
 async def api_auth_link_request(request: web.Request) -> web.Response:
     """POST /api/auth/link-request — generate a link code for a web user"""
-    cors = _get_cors_headers(request)
     try:
         body = await request.json()
     except Exception:
-        return web.Response(status=400, text=json.dumps({"error": "invalid json"}),
-                            content_type="application/json", headers=cors)
+        return json_response({"error": "invalid json"}, status=400)
 
     web_user_id = body.get("user_id")
     if not web_user_id:
-        return web.Response(status=400, text=json.dumps({"error": "user_id required"}),
-                            content_type="application/json", headers=cors)
+        return json_response({"error": "user_id required"}, status=400)
 
     import random, string
     code = ''.join(random.choices(string.digits, k=6))
@@ -1105,29 +1081,19 @@ async def api_auth_link_request(request: web.Request) -> web.Response:
         "created_at":  datetime.utcnow(),
     }
     logger.info(f"Link code {code} created for web_user_id={web_user_id}")
-    return web.Response(
-        text=json.dumps({"code": code}),
-        status=200, content_type="application/json", headers=cors,
-    )
+    return json_response({"code": code})
 
 
 async def api_auth_link_status(request: web.Request) -> web.Response:
     """GET /api/auth/link-status/{code} — poll for link completion"""
-    cors = _get_cors_headers(request)
     code = request.match_info.get("code", "")
     entry = link_codes.get(code)
     if not entry:
-        return web.Response(
-            text=json.dumps({"verified": False, "error": "not_found"}),
-            status=200, content_type="application/json", headers=cors,
-        )
-    return web.Response(
-        text=json.dumps({
-            "verified":    entry.get("verified", False),
-            "telegram_id": entry.get("telegram_id"),
-        }),
-        status=200, content_type="application/json", headers=cors,
-    )
+        return json_response({"verified": False, "error": "not_found"})
+    return json_response({
+        "verified":    entry.get("verified", False),
+        "telegram_id": entry.get("telegram_id"),
+    })
 
 
 async def api_auth_request(request: web.Request) -> web.Response:
@@ -1135,15 +1101,11 @@ async def api_auth_request(request: web.Request) -> web.Response:
     try:
         body = await request.json()
     except Exception:
-        return web.Response(status=204, headers=_get_cors_headers(request))
+        return json_response({"error": "invalid json"}, status=400)
 
     code = str(body.get("code", "")).strip()
     if not code or not code.isdigit() or len(code) != 6:
-        return web.Response(
-            text=json.dumps({"error": "Invalid code"}, ensure_ascii=False),
-            status=400, content_type="application/json",
-            headers=_get_cors_headers(request)
-        )
+        return json_response({"error": "Invalid code"}, status=400)
 
     # Удаляем старые коды этого же источника (по IP) — не обязательно, просто чистота
     web_auth_codes[code] = {
@@ -1156,11 +1118,7 @@ async def api_auth_request(request: web.Request) -> web.Response:
         "created_at": datetime.utcnow(),
     }
     logger.info(f"Web auth code registered: {code}")
-    return web.Response(
-        text=json.dumps({"ok": True, "expires_in": 600}, ensure_ascii=False),
-        status=200, content_type="application/json",
-        headers=_get_cors_headers(request)
-    )
+    return json_response({"ok": True, "expires_in": 600})
 
 
 async def api_auth_status(request: web.Request) -> web.Response:
@@ -1169,28 +1127,16 @@ async def api_auth_status(request: web.Request) -> web.Response:
     entry = web_auth_codes.get(code)
 
     if not entry:
-        return web.Response(
-            text=json.dumps({"verified": False, "error": "Code not found or expired"}, ensure_ascii=False),
-            status=404, content_type="application/json",
-            headers=_get_cors_headers(request)
-        )
+        return json_response({"verified": False, "error": "Code not found or expired"}, status=404)
 
     # Проверяем expiry (10 минут)
     age = (datetime.utcnow() - entry["created_at"]).total_seconds()
     if age > 600:
         web_auth_codes.pop(code, None)
-        return web.Response(
-            text=json.dumps({"verified": False, "error": "Code expired"}, ensure_ascii=False),
-            status=404, content_type="application/json",
-            headers=_get_cors_headers(request)
-        )
+        return json_response({"verified": False, "error": "Code expired"}, status=404)
 
     if not entry["verified"]:
-        return web.Response(
-            text=json.dumps({"verified": False}, ensure_ascii=False),
-            status=200, content_type="application/json",
-            headers=_get_cors_headers(request)
-        )
+        return json_response({"verified": False})
 
     # Верифицирован — возвращаем данные и удаляем код
     user_data = {
@@ -1204,11 +1150,7 @@ async def api_auth_status(request: web.Request) -> web.Response:
     }
     web_auth_codes.pop(code, None)
     logger.info(f"Web auth code {code} consumed for user {entry['telegram_id']}")
-    return web.Response(
-        text=json.dumps(user_data, ensure_ascii=False),
-        status=200, content_type="application/json",
-        headers=_get_cors_headers(request)
-    )
+    return json_response(user_data)
 
 
 async def cleanup_stale_sessions():
@@ -1285,9 +1227,6 @@ async def start_web_server():
         app = web.Application(middlewares=[cors_middleware])
         app.router.add_get('/health', health_check)
         app.router.add_get('/', health_check)
-
-        # OPTIONS preflight для всех /api/* маршрутов
-        app.router.add_route('OPTIONS', '/api/{path_info:.*}', options_handler)
 
         # API эндпоинты
         app.router.add_post('/api/consultation/start', api_consultation_start)
