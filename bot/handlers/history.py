@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 
 from bot.states import ViewHistory
 from bot.keyboards import get_main_menu
-from database.connection import supabase_client
+from database.connection import supabase_client, run_query
 from utils.logger import setup_logger
 from utils.export_anamnesis import format_anamnesis_text, generate_filename
 
@@ -21,12 +21,12 @@ async def show_history(message: Message, state: FSMContext):
     """Показать историю консультаций"""
     try:
         # Получаем консультации пользователя
-        response = supabase_client.table('consultations') \
-            .select('*') \
-            .eq('user_id', message.from_user.id) \
-            .order('created_at', desc=True) \
-            .limit(10) \
-            .execute()
+        response = await run_query(lambda: supabase_client.table('consultations')
+            .select('*')
+            .eq('user_id', message.from_user.id)
+            .order('created_at', desc=True)
+            .limit(10)
+            .execute())
 
         if not response.data or len(response.data) == 0:
             await message.answer(
@@ -183,10 +183,10 @@ async def export_anamnesis(message: Message):
         user_id = message.from_user.id
 
         # Получаем профиль пользователя
-        profile_response = supabase_client.table('user_profiles') \
-            .select('*') \
-            .eq('user_id', user_id) \
-            .execute()
+        profile_response = await run_query(lambda: supabase_client.table('user_profiles')
+            .select('*')
+            .eq('user_id', user_id)
+            .execute())
 
         if not profile_response.data or len(profile_response.data) == 0:
             await message.answer(
@@ -198,11 +198,11 @@ async def export_anamnesis(message: Message):
         user_profile = profile_response.data[0]
 
         # Получаем все консультации пользователя
-        consultations_response = supabase_client.table('consultations') \
-            .select('*') \
-            .eq('user_id', user_id) \
-            .order('created_at', desc=True) \
-            .execute()
+        consultations_response = await run_query(lambda: supabase_client.table('consultations')
+            .select('*')
+            .eq('user_id', user_id)
+            .order('created_at', desc=True)
+            .execute())
 
         consultations = consultations_response.data if consultations_response.data else []
 

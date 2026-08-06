@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 
 from bot.states import MedicationReminder
 from bot.keyboards import get_cancel_keyboard
-from database.connection import supabase_client
+from database.connection import supabase_client, run_query
 from utils.logger import setup_logger
 from utils.validators import sanitize_text
 
@@ -390,7 +390,7 @@ async def save_medication(message: Message, state: FSMContext):
             'updated_at': datetime.now().isoformat()
         }
 
-        supabase_client.table('medications').insert(medication_data).execute()
+        await run_query(lambda: supabase_client.table('medications').insert(medication_data).execute())
 
         await message.answer(
             "✅ *Напоминание создано!*\n\n"
@@ -419,12 +419,12 @@ async def show_medications_list(message: Message):
     try:
         user_id = message.from_user.id
 
-        response = supabase_client.table('medications') \
-            .select('*') \
-            .eq('user_id', user_id) \
-            .eq('is_active', True) \
-            .order('created_at', desc=True) \
-            .execute()
+        response = await run_query(lambda: supabase_client.table('medications')
+            .select('*')
+            .eq('user_id', user_id)
+            .eq('is_active', True)
+            .order('created_at', desc=True)
+            .execute())
 
         if not response.data or len(response.data) == 0:
             await message.answer(

@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 
 from bot.states import HealthDiary
 from bot.keyboards import get_cancel_keyboard
-from database.connection import supabase_client
+from database.connection import supabase_client, run_query
 from utils.logger import setup_logger
 from utils.validators import sanitize_text
 
@@ -474,7 +474,7 @@ async def save_diary_entry(message: Message, state: FSMContext):
             'updated_at': datetime.now().isoformat()
         }
 
-        supabase_client.table('health_diary').insert(entry_data).execute()
+        await run_query(lambda: supabase_client.table('health_diary').insert(entry_data).execute())
 
         await message.answer(
             "✅ *Запись сохранена!*\n\n"
@@ -502,13 +502,13 @@ async def show_diary_entries(message: Message):
     try:
         user_id = message.from_user.id
 
-        response = supabase_client.table('health_diary') \
-            .select('*') \
-            .eq('user_id', user_id) \
-            .order('entry_date', desc=True) \
-            .order('entry_time', desc=True) \
-            .limit(10) \
-            .execute()
+        response = await run_query(lambda: supabase_client.table('health_diary')
+            .select('*')
+            .eq('user_id', user_id)
+            .order('entry_date', desc=True)
+            .order('entry_time', desc=True)
+            .limit(10)
+            .execute())
 
         if not response.data or len(response.data) == 0:
             await message.answer(
