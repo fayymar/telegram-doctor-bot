@@ -205,6 +205,14 @@ async def api_consultation_start(request: web.Request) -> web.Response:
         logger.error(f"parse_and_generate_questions failed: {e}", exc_info=True)
         return json_response({"error": "AI service temporarily unavailable"}, status=503)
 
+    if questions is None:
+        # AI determined the input isn't a medical symptom description
+        logger.info(f"Non-medical input rejected: {symptoms[:100]!r}")
+        return json_response({
+            "error": "not_medical",
+            "message": "Похоже, это не описание симптомов. Опишите, что вас беспокоит (например: болит голова, температура, кашель).",
+        }, status=422)
+
     session_id = str(uuid.uuid4())
     consultation_sessions[session_id] = {
         "_created_at": datetime.utcnow(),
