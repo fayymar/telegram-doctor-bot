@@ -895,21 +895,21 @@ async def api_health_metrics_get(request: web.Request) -> web.Response:
 async def _check_anamnesis_fields():
     """Проверяет наличие полей анамнеза в user_profiles; пытается добавить их если нет."""
     try:
-        supabase_client.table("user_profiles").select(
+        await run_query(lambda: supabase_client.table("user_profiles").select(
             "chronic_diseases, drug_allergies, smoking, hereditary"
-        ).limit(1).execute()
+        ).limit(1).execute())
         logger.info("✅ Anamnesis fields present in user_profiles")
     except Exception as e:
         logger.warning(f"MISSING FIELDS in user_profiles: {e}")
         logger.warning("Attempting to add anamnesis fields via SQL migration...")
         try:
-            supabase_client.rpc("exec_sql", {"query": (
+            await run_query(lambda: supabase_client.rpc("exec_sql", {"query": (
                 "ALTER TABLE user_profiles "
                 "ADD COLUMN IF NOT EXISTS chronic_diseases TEXT[] DEFAULT '{}',"
                 "ADD COLUMN IF NOT EXISTS drug_allergies TEXT DEFAULT '',"
                 "ADD COLUMN IF NOT EXISTS smoking TEXT DEFAULT 'no',"
                 "ADD COLUMN IF NOT EXISTS hereditary TEXT[] DEFAULT '{}';"
-            )}).execute()
+            )}).execute())
             logger.info("✅ Anamnesis fields added via SQL migration")
         except Exception as rpc_err:
             logger.error(
