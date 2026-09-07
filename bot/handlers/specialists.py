@@ -1,10 +1,13 @@
-from aiogram import Router, F
-from aiogram.types import Message
+from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
+from aiogram.types import Message
 
+from bot.keyboards import (
+    get_specialist_actions,
+    get_specialist_categories,
+    get_specialists_in_category,
+)
 from bot.states import FindSpecialist
-from bot.keyboards import get_specialist_categories, get_specialists_in_category, get_specialist_actions
-
 
 router = Router()
 

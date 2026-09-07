@@ -1,11 +1,10 @@
 from aiogram.types import (
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardMarkup,
     InlineKeyboardButton,
-    WebAppInfo
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    WebAppInfo,
 )
-
 
 # ============ ГЛАВНОЕ МЕНЮ ============
 
@@ -47,12 +46,11 @@ def get_gender_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
 
 
 
-def get_step_keyboard_with_back(extra_buttons: list = None) -> ReplyKeyboardMarkup:
+def get_step_keyboard_with_back(extra_buttons: list | None = None) -> ReplyKeyboardMarkup:
     """Клавиатура для шагов регистрации с кнопкой Назад."""
     keyboard = []
     if extra_buttons:
-        for row in extra_buttons:
-            keyboard.append(row)
+        keyboard.extend(extra_buttons)
     keyboard.append([KeyboardButton(text="◀️ Назад"), KeyboardButton(text="❌ Отмена")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
@@ -193,6 +191,11 @@ def update_symptom_selection(keyboard: InlineKeyboardMarkup, selected: set, symp
             if button.callback_data.startswith("sym_"):
                 # Извлекаем индекс
                 idx = int(button.callback_data.split("_")[1])
+                if idx < 0 or idx >= len(symptoms):
+                    # Устаревший/рассинхронизированный callback_data — оставляем кнопку как есть,
+                    # не даём IndexError уронить обработчик
+                    new_row.append(button)
+                    continue
                 symptom = symptoms[idx]
                 
                 # Проверяем, выбран ли
@@ -262,11 +265,7 @@ def get_specialists_in_category(specialists: list[str]) -> ReplyKeyboardMarkup:
     Args:
         specialists: Список специалистов
     """
-    keyboard = []
-    
-    for specialist in specialists:
-        keyboard.append([KeyboardButton(text=f"🩺 {specialist}")])
-    
+    keyboard = [[KeyboardButton(text=f"🩺 {specialist}")] for specialist in specialists]
     keyboard.append([KeyboardButton(text="🔙 К категориям")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 

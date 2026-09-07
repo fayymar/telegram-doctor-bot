@@ -1,20 +1,20 @@
 from datetime import datetime
-from typing import Optional
+
 from pydantic import BaseModel
 
 
 class UserProfile(BaseModel):
     """Модель профиля пользователя"""
     user_id: int
-    username: Optional[str] = None
-    full_name: Optional[str] = None
-    phone: Optional[str] = None
-    birthdate: Optional[str] = None  # Хранится как строка в формате ISO (YYYY-MM-DD)
-    gender: Optional[str] = None  # 'male' или 'female'
-    height: Optional[int] = None  # в см
-    weight: Optional[float] = None  # в кг
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    username: str | None = None
+    full_name: str | None = None
+    phone: str | None = None
+    birthdate: str | None = None  # Хранится как строка в формате ISO (YYYY-MM-DD)
+    gender: str | None = None  # 'male' или 'female'
+    height: int | None = None  # в см
+    weight: float | None = None  # в кг
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     
     class Config:
         from_attributes = True
@@ -22,13 +22,13 @@ class UserProfile(BaseModel):
 
 class Consultation(BaseModel):
     """Модель консультации"""
-    id: Optional[int] = None
+    id: int | None = None
     user_id: int
     symptoms: str  # JSON строка с симптомами
     questions_answers: str  # JSON строка с вопросами и ответами
     recommended_doctor: str
     urgency_level: str  # 'low', 'medium', 'high', 'emergency'
-    created_at: Optional[datetime] = None
+    created_at: datetime | None = None
     
     class Config:
         from_attributes = True
@@ -36,12 +36,12 @@ class Consultation(BaseModel):
 
 class Message(BaseModel):
     """Модель сообщения в консультации"""
-    id: Optional[int] = None
+    id: int | None = None
     user_id: int
-    consultation_id: Optional[int] = None
+    consultation_id: int | None = None
     role: str  # 'user' или 'assistant'
     content: str
-    created_at: Optional[datetime] = None
+    created_at: datetime | None = None
     
     class Config:
         from_attributes = True

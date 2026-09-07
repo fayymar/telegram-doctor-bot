@@ -1,16 +1,19 @@
 """Обработчики для истории консультаций"""
+import asyncio
 import json
 import os
 from datetime import datetime
-from aiogram import Router, F
-from aiogram.types import Message, FSInputFile
-from aiogram.fsm.context import FSMContext
 
-from bot.states import ViewHistory
+from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.types import FSInputFile, Message
+
 from bot.keyboards import get_main_menu
-from database.connection import supabase_client, run_query
-from utils.logger import setup_logger
+from bot.states import ViewHistory
+from database.connection import run_query, supabase_client
 from utils.export_anamnesis import format_anamnesis_text, generate_filename
+from utils.logger import setup_logger
+from utils.markdown import escape_markdown
 
 logger = setup_logger(__name__)
 router = Router()
@@ -56,10 +59,11 @@ async def show_history(message: Message, state: FSMContext):
                 main_symptom = symptoms_data.get('main', 'не указано')
                 # Берем только первые 50 символов
                 main_symptom_short = main_symptom[:50] + '...' if len(main_symptom) > 50 else main_symptom
-            except:
+                main_symptom_short = escape_markdown(main_symptom_short)
+            except (json.JSONDecodeError, TypeError, KeyError):
                 main_symptom_short = 'не указано'
 
-            specialist = consultation['recommended_doctor']
+            specialist = escape_markdown(consultation['recommended_doctor'])
             urgency = consultation['urgency_level']
 
             # Эмодзи для срочности
@@ -117,15 +121,15 @@ async def show_consultation_details(message: Message, state: FSMContext):
 
         try:
             symptoms_data = json.loads(consultation['symptoms'])
-            main_symptoms = symptoms_data.get('main', 'не указано')
-            duration = symptoms_data.get('duration', 'не указано')
+            main_symptoms = escape_markdown(symptoms_data.get('main', 'не указано'))
+            duration = escape_markdown(symptoms_data.get('duration', 'не указано'))
             additional = symptoms_data.get('additional', [])
-        except:
+        except (json.JSONDecodeError, TypeError, KeyError):
             main_symptoms = 'не указано'
             duration = 'не указано'
             additional = []
 
-        specialist = consultation['recommended_doctor']
+        specialist = escape_markdown(consultation['recommended_doctor'])
         urgency = consultation['urgency_level']
 
         # Эмодзи для срочности
@@ -155,7 +159,7 @@ async def show_consultation_details(message: Message, state: FSMContext):
         if additional:
             details += "*Дополнительные симптомы:*\n"
             for symptom in additional:
-                details += f"• {symptom}\n"
+                details += f"• {escape_markdown(symptom)}\n"
         else:
             details += "*Дополнительные симптомы:* нет\n"
 
@@ -213,8 +217,12 @@ async def export_anamnesis(message: Message):
         filename = generate_filename(user_id, user_profile.get('full_name'))
         temp_path = f"/tmp/{filename}"
 
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            f.write(anamnesis_text)
+        def _write_temp_file():
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                f.write(anamnesis_text)
+
+        # Файловый I/O выносим в отдельный поток, чтобы не блокировать event loop
+        await asyncio.to_thread(_write_temp_file)
 
         # Отправляем файл пользователю
         document = FSInputFile(temp_path, filename=filename)
@@ -236,8 +244,8 @@ async def export_anamnesis(message: Message):
         # Удаляем временный файл
         try:
             os.remove(temp_path)
-        except:
-            pass
+        except OSError as cleanup_error:
+            logger.warning(f"Failed to remove temp file {temp_path}: {cleanup_error}")
 
         logger.info(f"Anamnesis exported for user {user_id}")
 

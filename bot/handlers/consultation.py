@@ -1,23 +1,28 @@
 import json
 from datetime import datetime
 
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.keyboards import get_cancel_keyboard, get_main_menu
 from bot.states import Consultation
-from bot.keyboards import get_main_menu, get_cancel_keyboard
+from database.connection import run_query, supabase_client
 from services.consultation_agent import (
-    validate_symptoms,
     check_red_flags,
-    parse_and_generate_questions,
-    get_duration_question,
     get_anamnesis_questions,
+    get_duration_question,
     get_final_recommendation,
     get_patient_history,
+    parse_and_generate_questions,
+    validate_symptoms,
 )
-from database.connection import supabase_client, run_query
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -404,7 +409,7 @@ async def _advance_anamnesis(msg, state: FSMContext, questions: list, next_index
     )
 
     # Feedback кнопки
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
     feedback_kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="👍 Полезно", callback_data=f"fb:good:{user_id}"),
         InlineKeyboardButton(text="👎 Не помогло", callback_data=f"fb:bad:{user_id}"),

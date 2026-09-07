@@ -3,12 +3,12 @@
 Использует библиотеку phonenumbers (Google libphonenumber)
 """
 
+
 import phonenumbers
 from phonenumbers import NumberParseException
-from typing import Tuple, Optional
 
 
-def format_phone_number(phone_input: str, default_country: str = "UZ") -> Tuple[bool, str, Optional[str]]:
+def format_phone_number(phone_input: str, default_country: str = "UZ") -> tuple[bool, str, str | None]:
     """
     Форматирует телефонный номер в международный стандарт
     
@@ -68,7 +68,7 @@ def format_phone_number(phone_input: str, default_country: str = "UZ") -> Tuple[
         
         return True, formatted, None
         
-    except NumberParseException as e:
+    except NumberParseException:
         # Если не удалось распарсить, пробуем добавить код страны по умолчанию
         try:
             # Убираем + если есть
@@ -84,7 +84,7 @@ def format_phone_number(phone_input: str, default_country: str = "UZ") -> Tuple[
                 return False, phone_input, "❌ Неверный формат номера телефона"
                 
         except NumberParseException:
-            return False, phone_input, f"❌ Не удалось распознать номер телефона"
+            return False, phone_input, "❌ Не удалось распознать номер телефона"
 
 
 def get_country_name(country_code: str) -> str:
@@ -122,7 +122,7 @@ def get_country_name(country_code: str) -> str:
     return countries.get(country_code, country_code)
 
 
-def detect_country_from_number(phone_input: str) -> Optional[str]:
+def detect_country_from_number(phone_input: str) -> str | None:
     """
     Определяет страну по номеру телефона
     
@@ -140,7 +140,7 @@ def detect_country_from_number(phone_input: str) -> Optional[str]:
         parsed = phonenumbers.parse(cleaned, None)
         if phonenumbers.is_valid_number(parsed):
             return phonenumbers.region_code_for_number(parsed)
-    except:
+    except (NumberParseException, ValueError, AttributeError):
         pass
     
     return None
@@ -188,7 +188,7 @@ def get_phone_info(phone_input: str, default_country: str = "UZ") -> dict:
             "number_type": type_names.get(number_type, "Неизвестно")
         }
         
-    except:
+    except (NumberParseException, ValueError, AttributeError):
         return {"valid": False}
 
 

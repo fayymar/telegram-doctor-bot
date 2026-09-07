@@ -1,10 +1,9 @@
 """Валидаторы для регистрации и редактирования профиля"""
 import re
 from datetime import datetime
-from typing import Tuple
 
 
-def validate_full_name(full_name: str) -> Tuple[bool, str]:
+def validate_full_name(full_name: str) -> tuple[bool, str]:
     """
     Валидация ФИО
     """
@@ -20,7 +19,7 @@ def validate_full_name(full_name: str) -> Tuple[bool, str]:
     return True, ""
 
 
-def validate_birthdate(date_string: str) -> Tuple[bool, str, datetime | None]:
+def validate_birthdate(date_string: str) -> tuple[bool, str, datetime | None]:
     """
     Гибкий парсер дат рождения.
     Принимает десятки форматов: числовые, текстовые, сокращённые, смешанные.
@@ -159,7 +158,7 @@ def validate_birthdate(date_string: str) -> Tuple[bool, str, datetime | None]:
     return True, "", birthdate
 
 
-def validate_age_or_birthdate(value: str) -> Tuple[bool, str, datetime | None, int | None]:
+def validate_age_or_birthdate(value: str) -> tuple[bool, str, datetime | None, int | None]:
     """
     Принимает либо возраст числом (например, 29),
     либо дату рождения (например, 15.03.1990).
@@ -200,7 +199,7 @@ def validate_age_or_birthdate(value: str) -> Tuple[bool, str, datetime | None, i
     return True, "", birthdate, age
 
 
-def validate_height(height_str: str) -> Tuple[bool, str, int | None]:
+def validate_height(height_str: str) -> tuple[bool, str, int | None]:
     """
     Валидация роста
     """
@@ -222,7 +221,7 @@ def validate_height(height_str: str) -> Tuple[bool, str, int | None]:
         return False, "❌ Пожалуйста, введите число\nНапример: 175", None
 
 
-def validate_weight(weight_str: str) -> Tuple[bool, str, float | None]:
+def validate_weight(weight_str: str) -> tuple[bool, str, float | None]:
     """
     Валидация веса
     """
@@ -251,7 +250,7 @@ def validate_weight(weight_str: str) -> Tuple[bool, str, float | None]:
         return False, "❌ Пожалуйста, введите число\nНапример: 70 или 70.5", None
 
 
-def validate_text_input(text: str, min_length: int = 1, max_length: int = 1000) -> Tuple[bool, str]:
+def validate_text_input(text: str, min_length: int = 1, max_length: int = 1000) -> tuple[bool, str]:
     """
     Валидация текстового ввода
     """

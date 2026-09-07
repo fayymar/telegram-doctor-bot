@@ -1,7 +1,7 @@
-from typing import Dict, List, Any, Tuple
+from typing import Any
 
-from services.symptom_parser import parse_symptoms
 from services.red_flags import detect_red_flags
+from services.symptom_parser import parse_symptoms
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -176,9 +176,9 @@ class MedicalRouter:
         self,
         main_symptoms: str,
         duration: str,
-        additional_symptoms: List[str],
-        user_profile: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        additional_symptoms: list[str],
+        user_profile: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Главная функция маршрутизации:
         1. объединяем симптомы
@@ -237,14 +237,14 @@ class MedicalRouter:
                 "urgency_reason": "Рекомендуется консультация в ближайшее время."
             }
 
-    def _fallback_specialist(self) -> Dict[str, Any]:
+    def _fallback_specialist(self) -> dict[str, Any]:
         return {
             "name": "Терапевт",
             "match_percent": 80,
             "reason": "Симптомы пока недостаточно специфичны, поэтому нужен врач для первичной очной оценки."
         }
 
-    def _merge_symptoms(self, main_symptoms: str, additional_symptoms: List[str]) -> str:
+    def _merge_symptoms(self, main_symptoms: str, additional_symptoms: list[str]) -> str:
         parts = []
 
         if main_symptoms and main_symptoms.strip():
@@ -257,12 +257,12 @@ class MedicalRouter:
 
     def _build_specialist_scores(
         self,
-        parsed: Dict[str, Any],
+        parsed: dict[str, Any],
         duration: str,
-        user_profile: Dict[str, Any],
-        additional_symptoms: List[str],
-        red_flag_result: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        user_profile: dict[str, Any],
+        additional_symptoms: list[str],
+        red_flag_result: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         cluster_scores = parsed.get("cluster_scores", {})
         primary_cluster = parsed.get("primary_cluster", "general")
         secondary_clusters = parsed.get("secondary_clusters", [])
@@ -270,7 +270,7 @@ class MedicalRouter:
         normalized_symptoms = parsed.get("normalized_symptoms", [])
         red_flag_cluster_boosts = red_flag_result.get("cluster_boosts", {})
 
-        doctor_scores: Dict[str, Dict[str, Any]] = {}
+        doctor_scores: dict[str, dict[str, Any]] = {}
 
         # 1. Основной кластер — главный источник
         self._apply_cluster_to_doctors(
@@ -347,7 +347,7 @@ class MedicalRouter:
 
     def _apply_cluster_to_doctors(
         self,
-        doctor_scores: Dict[str, Dict[str, Any]],
+        doctor_scores: dict[str, dict[str, Any]],
         cluster: str,
         cluster_weight: float,
         parsed_cluster_score: int
@@ -374,10 +374,10 @@ class MedicalRouter:
 
     def _apply_confidence_adjustments(
         self,
-        doctor_scores: Dict[str, Dict[str, Any]],
+        doctor_scores: dict[str, dict[str, Any]],
         primary_cluster: str,
         confidence: str,
-        parsed: Dict[str, Any]
+        parsed: dict[str, Any]
     ):
         if confidence == "high":
             self._boost_primary_doctors(doctor_scores, primary_cluster, +14)
@@ -394,7 +394,7 @@ class MedicalRouter:
             else:
                 self._boost_generalists(doctor_scores, +4)
 
-    def _boost_primary_doctors(self, doctor_scores: Dict[str, Dict[str, Any]], primary_cluster: str, bonus: int):
+    def _boost_primary_doctors(self, doctor_scores: dict[str, dict[str, Any]], primary_cluster: str, bonus: int):
         doctor_templates = CLUSTER_TO_SPECIALISTS.get(primary_cluster, [])
         primary_names = {item["name"] for item in doctor_templates if item["name"] != "Терапевт"}
 
@@ -402,15 +402,15 @@ class MedicalRouter:
             if name in doctor_scores:
                 doctor_scores[name]["score"] += bonus
 
-    def _boost_generalists(self, doctor_scores: Dict[str, Dict[str, Any]], bonus: int):
+    def _boost_generalists(self, doctor_scores: dict[str, dict[str, Any]], bonus: int):
         if "Терапевт" in doctor_scores:
             doctor_scores["Терапевт"]["score"] += bonus
 
-    def _penalize_therapist(self, doctor_scores: Dict[str, Dict[str, Any]], penalty: int):
+    def _penalize_therapist(self, doctor_scores: dict[str, dict[str, Any]], penalty: int):
         if "Терапевт" in doctor_scores:
             doctor_scores["Терапевт"]["score"] += penalty
 
-    def _is_mixed_case(self, parsed: Dict[str, Any]) -> bool:
+    def _is_mixed_case(self, parsed: dict[str, Any]) -> bool:
         primary_cluster = parsed.get("primary_cluster", "general")
         secondary_clusters = parsed.get("secondary_clusters", [])
         confidence = parsed.get("confidence", "low")
@@ -432,8 +432,8 @@ class MedicalRouter:
 
     def _apply_red_flag_doctor_adjustments(
         self,
-        doctor_scores: Dict[str, Dict[str, Any]],
-        red_flag_result: Dict[str, Any],
+        doctor_scores: dict[str, dict[str, Any]],
+        red_flag_result: dict[str, Any],
         primary_cluster: str
     ):
         if not red_flag_result.get("has_red_flags"):
@@ -489,10 +489,10 @@ class MedicalRouter:
 
     def _apply_duration_adjustments(
         self,
-        doctor_scores: Dict[str, Dict[str, Any]],
+        doctor_scores: dict[str, dict[str, Any]],
         duration: str,
         primary_cluster: str,
-        normalized_symptoms: List[str]
+        normalized_symptoms: list[str]
     ):
         duration_text = (duration or "").lower()
 
@@ -522,9 +522,9 @@ class MedicalRouter:
 
     def _apply_profile_adjustments(
         self,
-        doctor_scores: Dict[str, Dict[str, Any]],
-        user_profile: Dict[str, Any],
-        parsed: Dict[str, Any]
+        doctor_scores: dict[str, dict[str, Any]],
+        user_profile: dict[str, Any],
+        parsed: dict[str, Any]
     ):
         gender = user_profile.get("gender")
         age = user_profile.get("age")
@@ -551,9 +551,9 @@ class MedicalRouter:
 
     def _demote_therapist_if_case_is_specific(
         self,
-        doctor_scores: Dict[str, Dict[str, Any]],
-        parsed: Dict[str, Any],
-        red_flag_result: Dict[str, Any]
+        doctor_scores: dict[str, dict[str, Any]],
+        parsed: dict[str, Any],
+        red_flag_result: dict[str, Any]
     ):
         primary_cluster = parsed.get("primary_cluster", "general")
         confidence = parsed.get("confidence", "low")
@@ -569,7 +569,7 @@ class MedicalRouter:
         if red_flag_result.get("urgency") == "emergency":
             doctor_scores["Терапевт"]["score"] *= 0.35
 
-    def _normalize_doctor_scores(self, doctor_scores: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _normalize_doctor_scores(self, doctor_scores: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         if not doctor_scores:
             return []
 
@@ -612,10 +612,10 @@ class MedicalRouter:
 
     def _postprocess_ranked_specialists(
         self,
-        ranked: List[Dict[str, Any]],
-        parsed: Dict[str, Any],
-        red_flag_result: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        ranked: list[dict[str, Any]],
+        parsed: dict[str, Any],
+        red_flag_result: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         if not ranked:
             return ranked
 
@@ -639,7 +639,7 @@ class MedicalRouter:
 
         return ranked
 
-    def _renormalize_percentages(self, ranked: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _renormalize_percentages(self, ranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not ranked:
             return ranked
 
@@ -667,7 +667,7 @@ class MedicalRouter:
 
         return result
 
-    def _compress_reasons(self, reasons: List[str]) -> str:
+    def _compress_reasons(self, reasons: list[str]) -> str:
         unique = []
         seen = set()
 
@@ -684,11 +684,11 @@ class MedicalRouter:
 
     def _determine_urgency(
         self,
-        parsed: Dict[str, Any],
+        parsed: dict[str, Any],
         duration: str,
-        additional_symptoms: List[str],
-        red_flag_result: Dict[str, Any]
-    ) -> Tuple[str, str]:
+        additional_symptoms: list[str],
+        red_flag_result: dict[str, Any]
+    ) -> tuple[str, str]:
         normalized_symptoms = parsed.get("normalized_symptoms", [])
         primary_cluster = parsed.get("primary_cluster", "general")
         duration_text = (duration or "").lower()
