@@ -1,5 +1,7 @@
 import os
+
 from dotenv import load_dotenv
+
 from utils.logger import setup_logger
 
 # Загружаем переменные из .env файла (для локальной разработки)
@@ -33,13 +35,13 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 # Настройки
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
-PORT = int(os.getenv("PORT", 8080))
+PORT = int(os.getenv("PORT", "8080"))
 
 # FSM Timeout (в секундах)
-FSM_TIMEOUT = int(os.getenv("FSM_TIMEOUT", 1800))  # 30 минут по умолчанию
+FSM_TIMEOUT = int(os.getenv("FSM_TIMEOUT", "1800"))  # 30 минут по умолчанию
 
 logger.info("✅ Configuration loaded successfully")
-logger.info(f"   - Supabase URL: {SUPABASE_URL}")
+logger.info(f"   - Supabase configured: {'yes' if SUPABASE_URL else 'no'}")
 logger.info(f"   - Port: {PORT}")
 logger.info(f"   - Debug mode: {DEBUG}")
 logger.info(f"   - FSM timeout: {FSM_TIMEOUT}s")

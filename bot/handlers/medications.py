@@ -1,12 +1,13 @@
 """Обработчики для напоминаний о лекарствах"""
-from datetime import datetime, time
-from aiogram import Router, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.fsm.context import FSMContext
+from datetime import datetime
 
-from bot.states import MedicationReminder
+from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
+
 from bot.keyboards import get_cancel_keyboard
-from database.connection import supabase_client, run_query
+from bot.states import MedicationReminder
+from database.connection import run_query, supabase_client
 from utils.logger import setup_logger
 from utils.validators import sanitize_text
 

@@ -1,11 +1,10 @@
 import logging
-import sys
 import os
+import sys
 from logging.handlers import RotatingFileHandler
-from typing import Optional
 
 
-def setup_logger(name: str, level: Optional[int] = None) -> logging.Logger:
+def setup_logger(name: str, level: int | None = None) -> logging.Logger:
     """
     Настройка логгера с:
     - Выводом в stdout (для Render)

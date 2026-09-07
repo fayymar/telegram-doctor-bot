@@ -2,28 +2,38 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta
-from aiohttp import web
+from datetime import datetime, timedelta, timezone
+
 from aiogram import Bot, Dispatcher
-from aiogram.exceptions import TelegramConflictError
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramConflictError
 from aiogram.types import MenuButtonDefault
+from aiohttp import web
 
-from config import BOT_TOKEN
-from bot.handlers import basic, profile, consultation, specialists, history, medications, health_diary, clinic_finder, fallback
+from bot.handlers import (
+    basic,
+    clinic_finder,
+    consultation,
+    fallback,
+    health_diary,
+    history,
+    medications,
+    profile,
+    specialists,
+)
 from bot.middlewares import FSMTimeoutMiddleware
-from utils.logger import setup_logger
+from config import BOT_TOKEN
+from database.connection import run_query, supabase_client
 from services.consultation_agent import (
     check_red_flags,
-    parse_and_generate_questions,
     get_anamnesis_questions,
     get_final_recommendation,
     get_patient_history,
     get_recent_health_metrics,
+    parse_and_generate_questions,
 )
-from database.connection import supabase_client, run_query
-
+from utils.logger import setup_logger
 
 # Настройка логирования
 logging.basicConfig(
@@ -61,11 +71,12 @@ dp.include_router(fallback.router)    # Fallback для зависших FSM (В
 consultation_sessions: dict = {}
 
 # Хранилище кодов авторизации для Web — shared с bot handlers
-from bot.shared import web_auth_codes, link_codes
+import time as _time
 
 # ── Rate limiting (in-memory, resets on redeploy) ──────────────────────────
 from collections import defaultdict
-import time as _time
+
+from bot.shared import link_codes, web_auth_codes
 
 _rate_counters: dict = defaultdict(list)  # ip → [timestamps]
 _RATE_LIMIT = 60       # max requests
@@ -215,7 +226,7 @@ async def api_consultation_start(request: web.Request) -> web.Response:
 
     session_id = str(uuid.uuid4())
     consultation_sessions[session_id] = {
-        "_created_at": datetime.utcnow(),
+        "_created_at": datetime.now(timezone.utc),
         "user_id": user_id,
         "symptoms": symptoms,
         "user_profile": user_profile,
@@ -515,7 +526,7 @@ async def api_health_heartrate(request: web.Request) -> web.Response:
         logger.info(f"Received heartrate POST: {data}")
         user_id = data.get('user_id')
         heartrate = data.get('heartrate')
-        timestamp = data.get('timestamp', datetime.utcnow().isoformat())
+        timestamp = data.get('timestamp', datetime.now(timezone.utc).isoformat())
 
         if not heartrate:
             return json_response({'error': 'heartrate required'}, status=400)
@@ -703,7 +714,7 @@ async def api_health_metrics_post(request: web.Request) -> web.Response:
         return json_response({'error': 'Invalid JSON'}, status=400)
 
     user_id = data.get('user_id')
-    timestamp = data.get('timestamp') or datetime.utcnow().isoformat()
+    timestamp = data.get('timestamp') or datetime.now(timezone.utc).isoformat()
 
     # Если передан часовой пояс (формат "+05:00") — конвертируем timestamp в UTC
     tz_str = data.get('timezone')
@@ -784,7 +795,7 @@ async def api_health_metrics_report(request: web.Request) -> web.Response:
         return json_response({'error': 'user_id is required'}, status=400)
 
     try:
-        cutoff = (datetime.utcnow() - timedelta(hours=1)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
         resp = (
             supabase_client.table('health_metrics')
             .select('metric_type, value, recorded_at')
@@ -971,7 +982,7 @@ async def api_consultations_get(request: web.Request) -> web.Response:
                 symptoms_parsed = json.loads(symptoms_raw) if symptoms_raw else {}
                 if 'text' in symptoms_parsed:
                     symptoms_text = symptoms_parsed['text']
-                elif 'history' in symptoms_parsed and symptoms_parsed['history']:
+                elif symptoms_parsed.get('history'):
                     first = next(
                         (h for h in symptoms_parsed['history'] if not h.get('question')),
                         symptoms_parsed['history'][0]
@@ -1060,7 +1071,7 @@ async def api_auth_social(request: web.Request) -> web.Response:
             "provider":   provider,
             "email":      email,
             "is_new":     is_new,
-            "auth_date":  int(datetime.utcnow().timestamp()),
+            "auth_date":  int(datetime.now(timezone.utc).timestamp()),
         })
 
     except Exception as e:
@@ -1080,13 +1091,14 @@ async def api_auth_link_request(request: web.Request) -> web.Response:
     if not web_user_id:
         return json_response({"error": "user_id required"}, status=400)
 
-    import random, string
+    import random
+    import string
     code = ''.join(random.choices(string.digits, k=6))
     link_codes[code] = {
         "web_user_id": int(web_user_id),
         "verified":    False,
         "telegram_id": None,
-        "created_at":  datetime.utcnow(),
+        "created_at":  datetime.now(timezone.utc),
     }
     logger.info(f"Link code {code} created for web_user_id={web_user_id}")
     return json_response({"code": code})
@@ -1123,7 +1135,7 @@ async def api_auth_request(request: web.Request) -> web.Response:
         "username": None,
         "photo_url": None,
         "verified": False,
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
     }
     logger.info(f"Web auth code registered: {code}")
     return json_response({"ok": True, "expires_in": 600})
@@ -1138,7 +1150,7 @@ async def api_auth_status(request: web.Request) -> web.Response:
         return json_response({"verified": False, "error": "Code not found or expired"}, status=404)
 
     # Проверяем expiry (10 минут)
-    age = (datetime.utcnow() - entry["created_at"]).total_seconds()
+    age = (datetime.now(timezone.utc) - entry["created_at"]).total_seconds()
     if age > 600:
         web_auth_codes.pop(code, None)
         return json_response({"verified": False, "error": "Code expired"}, status=404)
@@ -1154,7 +1166,7 @@ async def api_auth_status(request: web.Request) -> web.Response:
         "last_name": entry["last_name"],
         "username": entry["username"],
         "photo_url": entry["photo_url"],
-        "auth_date": int(datetime.utcnow().timestamp()),
+        "auth_date": int(datetime.now(timezone.utc).timestamp()),
     }
     web_auth_codes.pop(code, None)
     logger.info(f"Web auth code {code} consumed for user {entry['telegram_id']}")
@@ -1165,7 +1177,7 @@ async def cleanup_stale_sessions():
     """Удаляет сессии консультаций старше 2 часов из памяти."""
     while True:
         await asyncio.sleep(3600)  # каждый час
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         stale = []
         for sid, session in list(consultation_sessions.items()):
             created = session.get("_created_at")
@@ -1265,13 +1277,13 @@ async def start_web_server():
 
         # Render использует порт из переменной окружения PORT
         import os
-        port = int(os.getenv('PORT', 8080))
+        port = int(os.getenv('PORT', '8080'))
 
         site = web.TCPSite(runner, '0.0.0.0', port)
         await site.start()
 
         logger.info(f"✅ Web server started successfully on http://0.0.0.0:{port}")
-        logger.info(f"   Health check endpoints: /health, /")
+        logger.info("   Health check endpoints: /health, /")
 
         # Держим сервер запущенным
         while True:
@@ -1336,7 +1348,7 @@ async def api_diary_post(request: web.Request) -> web.Response:
             if field in body and body[field] is not None:
                 row[field] = body[field]
         for field in ('mood', 'symptoms', 'notes'):
-            if field in body and body[field]:
+            if body.get(field):
                 row[field] = body[field]
         resp = await run_query(
             lambda: supabase_client.table('health_diary').insert(row).execute()
@@ -1402,14 +1414,22 @@ async def main():
     logger.info("=" * 60)
 
     try:
-        # Запускаем веб-сервер и бота параллельно
-        # Веб-сервер всегда доступен, бот автоматически перезапускается
-        await asyncio.gather(
+        # Запускаем веб-сервер, бота и фоновую очистку параллельно.
+        # return_exceptions=True нужен, чтобы падение одной задачи не отменило
+        # остальные немедленно — но результаты нужно проверить явно, иначе
+        # критичный сбой (например, падение polling бота) останется незамеченным
+        # и процесс продолжит "жить" в полумёртвом состоянии.
+        task_names = ("web_server", "bot", "cleanup_stale_sessions")
+        results = await asyncio.gather(
             start_web_server(),
             start_bot(),
             cleanup_stale_sessions(),
-            return_exceptions=True  # Не останавливаем всё при падении одной задачи
+            return_exceptions=True
         )
+        for name, result in zip(task_names, results):
+            if isinstance(result, Exception):
+                logger.critical(f"❌ Task '{name}' failed: {result}", exc_info=result)
+                raise result
     except Exception as e:
         logger.critical(f"❌ Fatal error in main: {e}", exc_info=True)
         raise

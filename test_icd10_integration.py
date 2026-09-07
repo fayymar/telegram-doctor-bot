@@ -1,11 +1,13 @@
 """
 Тест интеграции МКБ-10
 """
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from services.medical_knowledge import LocalMedicalDB
+
 
 def test_icd10():
     """Тест МКБ-10 интеграции"""
@@ -23,7 +25,7 @@ def test_icd10():
         print(f"✅ Найдено: {result['matched_keyword']}")
         print(f"   МКБ-10: {result['icd10_code']} - {result['icd10_name']}")
         print(f"   Уверенность: {result['confidence']:.0%}")
-        print(f"   Специалисты:")
+        print("   Специалисты:")
         for spec in result['specialists']:
             print(f"      • {spec['name']} - {spec['percent']}%")
     else:
@@ -38,7 +40,7 @@ def test_icd10():
         print(f"   МКБ-10: {result['icd10_code']} - {result['icd10_name']}")
         print(f"   Уверенность: {result['confidence']:.0%}")
         print(f"   Красные флаги: {'Да' if result['red_flags_found'] else 'Нет'}")
-        print(f"   Специалисты:")
+        print("   Специалисты:")
         for spec in result['specialists']:
             print(f"      • {spec['name']} - {spec['percent']}%")
     else:
@@ -52,7 +54,7 @@ def test_icd10():
         print(f"✅ Найдено: {result['matched_keyword']}")
         print(f"   МКБ-10: {result['icd10_code']} - {result['icd10_name']}")
         print(f"   Уверенность: {result['confidence']:.0%}")
-        print(f"   Специалисты:")
+        print("   Специалисты:")
         for spec in result['specialists']:
             print(f"      • {spec['name']} - {spec['percent']}%")
     else:
@@ -66,7 +68,7 @@ def test_icd10():
         print(f"✅ Найдено: {result['matched_keyword']}")
         print(f"   МКБ-10: {result['icd10_code']} - {result['icd10_name']}")
         print(f"   Уверенность: {result['confidence']:.0%}")
-        print(f"   Специалисты:")
+        print("   Специалисты:")
         for spec in result['specialists']:
             print(f"      • {spec['name']} - {spec['percent']}%")
     else:

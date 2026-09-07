@@ -1,16 +1,22 @@
-from aiogram import Router, F
-from aiogram.types import (
-    Message, CallbackQuery, ChatMemberUpdated,
-    ReplyKeyboardMarkup, KeyboardButton,
-    InlineKeyboardMarkup, InlineKeyboardButton,
-    WebAppInfo, MenuButtonWebApp, MenuButtonDefault,
-)
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.types import (
+    CallbackQuery,
+    ChatMemberUpdated,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    MenuButtonDefault,
+    MenuButtonWebApp,
+    Message,
+    ReplyKeyboardMarkup,
+    WebAppInfo,
+)
 
-from bot.keyboards import get_main_menu, get_clinics_specialists_submenu
+from bot.keyboards import get_clinics_specialists_submenu, get_main_menu
 from bot.states import Registration
-from database.connection import supabase_client, run_query
+from database.connection import run_query, supabase_client
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -46,8 +52,10 @@ def _get_start_keyboard() -> InlineKeyboardMarkup:
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     """Обработчик /start — поддерживает deep link auth_XXXXXX"""
-    from bot.shared import web_auth_codes
     from datetime import datetime as _dt
+    from datetime import timezone
+
+    from bot.shared import web_auth_codes
 
     user_id = message.from_user.id
     first_name = message.from_user.first_name or "друг"
@@ -68,7 +76,7 @@ async def cmd_start(message: Message, state: FSMContext):
             )
             return
 
-        age = (_dt.utcnow() - entry["created_at"]).total_seconds()
+        age = (_dt.now(timezone.utc) - entry["created_at"]).total_seconds()
         if age > 600:
             web_auth_codes.pop(code, None)
             await message.answer(
@@ -101,16 +109,18 @@ async def cmd_start(message: Message, state: FSMContext):
 
     if payload.startswith("link_"):
         code = payload[5:]
+        from datetime import datetime as _dt2
+        from datetime import timezone
+
         from bot.shared import link_codes
         from database.connection import supabase_client as _sb
-        from datetime import datetime as _dt2
 
         entry = link_codes.get(code)
         if not entry:
             await message.answer("❌ Код привязки не найден или истёк.\n\nОткройте Symed → Профиль → Подключить Telegram.")
             return
 
-        age = (_dt2.utcnow() - entry["created_at"]).total_seconds()
+        age = (_dt2.now(timezone.utc) - entry["created_at"]).total_seconds()
         if age > 600:
             link_codes.pop(code, None)
             await message.answer("⏰ Код истёк (10 минут). Получите новый в Symed.")
@@ -405,7 +415,8 @@ async def handle_web_auth_code(message: Message):
         await message.answer("❌ Код не найден или уже истёк.\n\nОткройте symed-web.vercel.app и получите новый код.")
         return
     from datetime import datetime as _dt
-    age = (_dt.utcnow() - entry['created_at']).total_seconds()
+    from datetime import timezone
+    age = (_dt.now(timezone.utc) - entry['created_at']).total_seconds()
     if age > 600:
         web_auth_codes.pop(code, None)
         await message.answer("⏰ Код истёк (действует 10 минут).\n\nОткройте symed-web.vercel.app и получите новый код.")
@@ -427,9 +438,9 @@ async def handle_web_auth_code(message: Message):
 @router.message(Command("link"))
 async def cmd_link(message: Message) -> None:
     """Привязка Telegram-аккаунта к веб-профилю: /link КОД"""
+
     from bot.shared import link_codes
-    from database.connection import supabase_client, run_query
-    import json
+    from database.connection import run_query, supabase_client
 
     parts = (message.text or "").strip().split()
     if len(parts) < 2:
@@ -449,7 +460,8 @@ async def cmd_link(message: Message) -> None:
         return
 
     from datetime import datetime as _dt
-    age = (_dt.utcnow() - entry["created_at"]).total_seconds()
+    from datetime import timezone
+    age = (_dt.now(timezone.utc) - entry["created_at"]).total_seconds()
     if age > 600:
         link_codes.pop(code, None)
         await message.answer("⏰ Код истёк (10 минут).\n\nПолучите новый код в Symed.")

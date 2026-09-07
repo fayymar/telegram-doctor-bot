@@ -10,7 +10,6 @@ Only use on paid plan (Render Starter+, 2GB+ RAM).
 """
 import json
 import logging
-import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -32,8 +31,8 @@ def _load_model():
         return _model is not None
 
     try:
-        from sentence_transformers import SentenceTransformer  # noqa: heavy-optional
-        import numpy as np
+        import numpy as np  # noqa: F401 -- import used only to fail fast if numpy is missing
+        from sentence_transformers import SentenceTransformer
 
         logger.info("Loading symptom embedding model...")
         _model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")

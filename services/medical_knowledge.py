@@ -4,7 +4,7 @@
 """
 import json
 import os
-from typing import Optional
+
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -41,7 +41,7 @@ class LocalMedicalDB:
             logger.error(f"Failed to parse {filename}: {e}")
             return {}
 
-    def search(self, symptoms_text: str) -> Optional[dict]:
+    def search(self, symptoms_text: str) -> dict | None:
         """
         Поиск по симптомам в локальной базе с использованием МКБ-10
 
@@ -168,7 +168,7 @@ class LocalMedicalDB:
         keywords = set()
 
         # Проверяем каждый синоним
-        for key, variants in synonyms.items():
+        for variants in synonyms.values():
             for variant in variants:
                 if variant.replace('_', ' ') in text or variant.replace('_', '') in text:
                     # Добавляем все варианты для этого ключа
@@ -195,7 +195,7 @@ class LocalMedicalDB:
                 return True
         return False
 
-    def get_symptom_info(self, keyword: str) -> Optional[dict]:
+    def get_symptom_info(self, keyword: str) -> dict | None:
         """Получить информацию о конкретном симптоме"""
         return self.symptoms_db.get(keyword)
 

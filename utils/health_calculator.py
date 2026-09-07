@@ -1,5 +1,4 @@
 """Калькуляторы здоровья (ИМТ, идеальный вес и т.д.)"""
-from typing import Tuple, Optional
 
 
 def calculate_bmi(weight_kg: float, height_cm: int) -> float:
@@ -18,7 +17,7 @@ def calculate_bmi(weight_kg: float, height_cm: int) -> float:
     return round(bmi, 1)
 
 
-def get_bmi_category(bmi: float) -> Tuple[str, str, str]:
+def get_bmi_category(bmi: float) -> tuple[str, str, str]:
     """
     Определяет категорию ИМТ и рекомендации
 
@@ -44,7 +43,7 @@ def get_bmi_category(bmi: float) -> Tuple[str, str, str]:
         return "Ожирение III степени", "🔴", "Критическое состояние. Срочно к врачу!"
 
 
-def get_ideal_weight_range(height_cm: int, gender: str = None) -> Tuple[float, float]:
+def get_ideal_weight_range(height_cm: int, gender: str | None = None) -> tuple[float, float]:
     """
     Рассчитывает диапазон идеального веса по формуле Devine
 
@@ -67,7 +66,7 @@ def get_ideal_weight_range(height_cm: int, gender: str = None) -> Tuple[float, f
     return round(min_weight, 1), round(max_weight, 1)
 
 
-def format_bmi_info(weight_kg: float, height_cm: int, gender: str = None) -> str:
+def format_bmi_info(weight_kg: float, height_cm: int, gender: str | None = None) -> str:
     """
     Форматирует полную информацию об ИМТ
 
@@ -83,11 +82,11 @@ def format_bmi_info(weight_kg: float, height_cm: int, gender: str = None) -> str
     category, emoji, recommendation = get_bmi_category(bmi)
     min_weight, max_weight = get_ideal_weight_range(height_cm, gender)
 
-    info = f"📊 *Индекс массы тела (ИМТ)*\n\n"
+    info = "📊 *Индекс массы тела (ИМТ)*\n\n"
     info += f"{emoji} *ИМТ:* {bmi}\n"
     info += f"*Категория:* {category}\n\n"
     info += f"💡 *Рекомендация:*\n{recommendation}\n\n"
-    info += f"⚖️ *Идеальный вес для вашего роста:*\n"
+    info += "⚖️ *Идеальный вес для вашего роста:*\n"
     info += f"{min_weight}-{max_weight} кг"
 
     # Показываем разницу с текущим весом
@@ -101,7 +100,7 @@ def format_bmi_info(weight_kg: float, height_cm: int, gender: str = None) -> str
     return info
 
 
-def calculate_age(birthdate_str: str) -> Optional[int]:
+def calculate_age(birthdate_str: str) -> int | None:
     """
     Вычисляет возраст по дате рождения
 

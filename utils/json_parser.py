@@ -1,13 +1,13 @@
 """Утилиты для безопасного парсинга JSON из AI ответов"""
 import json
 import re
-from typing import Optional, Dict, List, Union
+
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
 
-def extract_json_from_text(text: str, json_type: str = "object") -> Optional[Union[Dict, List]]:
+def extract_json_from_text(text: str, json_type: str = "object") -> dict | list | None:
     """
     Извлекает JSON из текста AI, пытаясь разные стратегии
 
@@ -60,7 +60,7 @@ def extract_json_from_text(text: str, json_type: str = "object") -> Optional[Uni
     return None
 
 
-def safe_parse_json_object(text: str, default: Optional[Dict] = None) -> Dict:
+def safe_parse_json_object(text: str, default: dict | None = None) -> dict:
     """
     Безопасно парсит JSON объект с fallback
 
@@ -74,7 +74,7 @@ def safe_parse_json_object(text: str, default: Optional[Dict] = None) -> Dict:
     result = extract_json_from_text(text, json_type="object")
 
     if result is None:
-        logger.warning(f"Using default value for failed JSON parse")
+        logger.warning("Using default value for failed JSON parse")
         return default or {}
 
     if not isinstance(result, dict):
@@ -84,7 +84,7 @@ def safe_parse_json_object(text: str, default: Optional[Dict] = None) -> Dict:
     return result
 
 
-def safe_parse_json_array(text: str, default: Optional[List] = None) -> List:
+def safe_parse_json_array(text: str, default: list | None = None) -> list:
     """
     Безопасно парсит JSON массив с fallback
 
@@ -98,7 +98,7 @@ def safe_parse_json_array(text: str, default: Optional[List] = None) -> List:
     result = extract_json_from_text(text, json_type="array")
 
     if result is None:
-        logger.warning(f"Using default value for failed JSON parse")
+        logger.warning("Using default value for failed JSON parse")
         return default or []
 
     if not isinstance(result, list):
@@ -108,7 +108,7 @@ def safe_parse_json_array(text: str, default: Optional[List] = None) -> List:
     return result
 
 
-def validate_json_structure(data: Dict, required_keys: List[str]) -> bool:
+def validate_json_structure(data: dict, required_keys: list[str]) -> bool:
     """
     Проверяет что JSON содержит все требуемые ключи
 

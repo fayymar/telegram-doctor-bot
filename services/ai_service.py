@@ -1,13 +1,16 @@
 import asyncio
 import re
 from functools import partial
-from typing import List
 
 import anthropic
 
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, GROQ_API_KEY, GROQ_MODEL
+from utils.json_parser import (
+    safe_parse_json_array,
+    safe_parse_json_object,
+    validate_json_structure,
+)
 from utils.logger import setup_logger
-from utils.json_parser import safe_parse_json_object, safe_parse_json_array, validate_json_structure
 
 logger = setup_logger(__name__)
 
@@ -22,9 +25,7 @@ def _is_anthropic_billing_or_unavailable(exc: Exception) -> bool:
         msg = str(exc).lower()
         if any(kw in msg for kw in ("credit", "balance", "billing", "quota", "overload", "capacity")):
             return True
-    if isinstance(exc, (anthropic.APIConnectionError, anthropic.APITimeoutError)):
-        return True
-    return False
+    return isinstance(exc, (anthropic.APIConnectionError, anthropic.APITimeoutError))
 
 
 class AIService:
@@ -340,7 +341,7 @@ class AIService:
             logger.error(f"Error in improve_symptoms_text: {e}. Using local fallback", exc_info=True)
             return self._local_improve_text(text)
 
-    def generate_additional_symptoms(self, main_symptoms: str, duration: str) -> List[str]:
+    def generate_additional_symptoms(self, main_symptoms: str, duration: str) -> list[str]:
         """
         Генерирует список дополнительных симптомов для уточнения
         """
@@ -391,7 +392,7 @@ class AIService:
             logger.error(f"Error in generate_additional_symptoms: {e}", exc_info=True)
             return self._fallback_additional_symptoms(main_symptoms)
 
-    def _fallback_additional_symptoms(self, main_symptoms: str) -> List[str]:
+    def _fallback_additional_symptoms(self, main_symptoms: str) -> list[str]:
         """
         Простой fallback-список, если AI не сработал
         """
@@ -444,7 +445,7 @@ class AIService:
             "одышка"
         ]
 
-    def _filter_symptoms(self, symptoms: List[str]) -> List[str]:
+    def _filter_symptoms(self, symptoms: list[str]) -> list[str]:
         """
         Фильтрует список симптомов
         """
@@ -479,7 +480,7 @@ class AIService:
         self,
         main_symptoms: str,
         duration: str,
-        additional_symptoms: List[str],
+        additional_symptoms: list[str],
         user_profile: dict
     ) -> dict:
         """
@@ -609,7 +610,7 @@ class AIService:
             logger.error(f"Error in recommend_doctor: {e}", exc_info=True)
             return self._fallback_recommendation(main_symptoms, additional_symptoms)
 
-    def _fallback_recommendation(self, main_symptoms: str, additional_symptoms: List[str]) -> dict:
+    def _fallback_recommendation(self, main_symptoms: str, additional_symptoms: list[str]) -> dict:
         """
         Простой локальный fallback, если AI не выдал корректный JSON
         """

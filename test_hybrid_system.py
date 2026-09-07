@@ -1,8 +1,8 @@
 """
 Тест гибридной системы рекомендаций
 """
-import sys
 import os
+import sys
 
 # Добавляем корневую директорию в PYTHONPATH
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -15,6 +15,7 @@ except ImportError:
     pass  # dotenv не обязателен для теста
 
 from services.medical_router import MedicalRouter
+
 
 def test_hybrid_system():
     """Тест гибридной системы"""
@@ -36,7 +37,7 @@ def test_hybrid_system():
     print(f"Источник: {result.get('source', 'unknown')}")
     print(f"Уверенность: {result.get('confidence', 'N/A')}")
     print(f"Срочность: {result['urgency']}")
-    print(f"Специалисты:")
+    print("Специалисты:")
     for spec in result['specialists'][:3]:
         print(f"  • {spec['name']} - {spec['match_percent']}%")
         print(f"    {spec['reason']}")
@@ -53,7 +54,7 @@ def test_hybrid_system():
     print(f"Источник: {result.get('source', 'unknown')}")
     print(f"Уверенность: {result.get('confidence', 'N/A')}")
     print(f"Срочность: {result['urgency']}")
-    print(f"Специалисты:")
+    print("Специалисты:")
     for spec in result['specialists'][:3]:
         print(f"  • {spec['name']} - {spec['match_percent']}%")
         print(f"    {spec['reason'][:80]}...")
@@ -70,7 +71,7 @@ def test_hybrid_system():
     print(f"Источник: {result.get('source', 'unknown')}")
     print(f"Уверенность: {result.get('confidence', 'N/A')}")
     print(f"Срочность: {result['urgency']}")
-    print(f"Специалисты:")
+    print("Специалисты:")
     for spec in result['specialists'][:3]:
         print(f"  • {spec['name']} - {spec['match_percent']}%")
         print(f"    {spec['reason'][:80]}...")

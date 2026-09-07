@@ -1,6 +1,12 @@
 """Обработчики для поиска ближайших клиник"""
-from aiogram import Router, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import F, Router
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 
 from bot.keyboards import get_main_menu
 from utils.logger import setup_logger

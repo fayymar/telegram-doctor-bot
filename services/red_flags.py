@@ -1,5 +1,4 @@
-from typing import Dict, Any, List
-
+from typing import Any
 
 URGENCY_ORDER = {
     "low": 1,
@@ -199,7 +198,7 @@ def _max_urgency(current: str, new: str) -> str:
     return current
 
 
-def detect_red_flags(parsed: Dict[str, Any], additional_symptoms: List[str] | None = None) -> Dict[str, Any]:
+def detect_red_flags(parsed: dict[str, Any], additional_symptoms: list[str] | None = None) -> dict[str, Any]:
     """
     Возвращает:
     {
@@ -219,7 +218,7 @@ def detect_red_flags(parsed: Dict[str, Any], additional_symptoms: List[str] | No
     urgency = "low"
     reasons = []
     matched_flags = []
-    cluster_boosts: Dict[str, int] = {}
+    cluster_boosts: dict[str, int] = {}
 
     # 1. Прямые red flags
     for symptom in normalized_symptoms:

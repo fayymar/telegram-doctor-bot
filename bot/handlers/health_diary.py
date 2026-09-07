@@ -1,12 +1,19 @@
 """Обработчики для дневника здоровья"""
-from datetime import datetime, date
-from aiogram import Router, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.fsm.context import FSMContext
+from datetime import date, datetime
 
-from bot.states import HealthDiary
+from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
+
 from bot.keyboards import get_cancel_keyboard
-from database.connection import supabase_client, run_query
+from bot.states import HealthDiary
+from database.connection import run_query, supabase_client
 from utils.logger import setup_logger
 from utils.validators import sanitize_text
 
@@ -407,7 +414,7 @@ async def show_diary_confirmation(callback, state: FSMContext):
 
     # Формируем сводку
     entry_date = datetime.fromisoformat(data['entry_date'])
-    summary = f"📓 *Запись в дневник*\n\n"
+    summary = "📓 *Запись в дневник*\n\n"
     summary += f"📅 {entry_date.strftime('%d.%m.%Y')} в {data['entry_time']}\n\n"
 
     if data.get('temperature'):

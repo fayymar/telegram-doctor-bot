@@ -1,34 +1,38 @@
 from datetime import datetime
-from aiogram import Router, F, Bot
-from aiogram.types import (
-    Message, CallbackQuery,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
-    InlineKeyboardMarkup, InlineKeyboardButton,
-)
-from aiogram.fsm.context import FSMContext
 
-from bot.states import Registration, EditProfile
+from aiogram import Bot, F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
+from postgrest.exceptions import APIError
+
 from bot.handlers.basic import set_webapp_menu_button
 from bot.keyboards import (
-    get_main_menu,
-    get_phone_keyboard,
-    get_gender_keyboard,
     get_cancel_keyboard,
-    get_profile_menu,
     get_edit_profile_menu,
-    get_step_keyboard_with_back,
+    get_gender_keyboard,
+    get_main_menu,
     get_phone_keyboard_with_back,
+    get_profile_menu,
+    get_step_keyboard_with_back,
 )
-from database.connection import supabase_client, run_query
-from postgrest.exceptions import APIError
+from bot.states import EditProfile, Registration
+from database.connection import run_query, supabase_client
 from services.phone_formatter import format_phone_number, get_phone_info
 from utils.logger import setup_logger
 from utils.validators import (
-    validate_full_name,
+    sanitize_text,
     validate_age_or_birthdate,
+    validate_full_name,
     validate_height,
     validate_weight,
-    sanitize_text
 )
 
 logger = setup_logger(__name__)
@@ -838,16 +842,16 @@ async def _try_delete(bot: Bot, message: Message):
     """Безопасно удаляет сообщение пользователя."""
     try:
         await bot.delete_message(message.chat.id, message.message_id)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to delete message {message.message_id}: {e}")
 
 
 async def _try_delete_by_id(bot: Bot, chat_id: int, message_id: int):
     """Безопасно удаляет сообщение по ID."""
     try:
         await bot.delete_message(chat_id, message_id)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to delete message {message_id} in chat {chat_id}: {e}")
 
 
 
@@ -1601,7 +1605,7 @@ async def edit_birthdate(message: Message, state: FSMContext):
 
     except Exception as e:
         logger.error(f"DB Error in edit_birthdate: {e}", exc_info=True)
-        await message.answer(f"❌ Ошибка при сохранении:\n{str(e)}")
+        await message.answer(f"❌ Ошибка при сохранении:\n{e!s}")
 
 
 @router.message(EditProfile.waiting_for_gender, F.text.in_(list(GENDER_TEXT_TO_CODE.keys())))

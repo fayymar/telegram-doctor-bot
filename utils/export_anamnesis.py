@@ -1,15 +1,14 @@
 """Утилиты для экспорта анамнеза пользователя"""
 import json
 from datetime import datetime
-from typing import Dict, List, Optional
 from io import StringIO
 
 from utils.health_calculator import calculate_bmi, get_bmi_category
 
 
 def format_anamnesis_text(
-    user_profile: Dict,
-    consultations: List[Dict]
+    user_profile: dict,
+    consultations: list[dict]
 ) -> str:
     """
     Форматирует анамнез пользователя в текстовый формат
@@ -47,7 +46,7 @@ def format_anamnesis_text(
             birth_date_obj = datetime.fromisoformat(str(birthdate))
             age = (datetime.now() - birth_date_obj).days // 365
             output.write(f"Дата рождения: {birth_date_obj.strftime('%d.%m.%Y')} (возраст: {age} лет)\n")
-        except:
+        except (ValueError, TypeError):
             output.write(f"Дата рождения: {birthdate}\n")
     else:
         output.write("Дата рождения: Не указано\n")
@@ -88,7 +87,7 @@ def format_anamnesis_text(
             category, emoji, recommendation = get_bmi_category(bmi)
             output.write(f"ИМТ: {bmi} ({category})\n")
             output.write(f"Рекомендация: {recommendation}\n")
-        except:
+        except (ValueError, TypeError, ZeroDivisionError):
             output.write("ИМТ: Не удалось рассчитать\n")
     else:
         output.write("ИМТ: Недостаточно данных для расчета\n")
@@ -113,7 +112,7 @@ def format_anamnesis_text(
                 created = datetime.fromisoformat(consultation['created_at'].replace('Z', '+00:00'))
                 date_str = created.strftime('%d.%m.%Y в %H:%M')
                 output.write(f"Дата: {date_str}\n\n")
-            except:
+            except (ValueError, TypeError, KeyError):
                 output.write(f"Дата: {consultation.get('created_at', 'Не указано')}\n\n")
 
             # Симптомы
@@ -135,7 +134,7 @@ def format_anamnesis_text(
                     output.write("\n")
                 else:
                     output.write("Дополнительные симптомы: Нет\n\n")
-            except:
+            except (json.JSONDecodeError, TypeError, KeyError):
                 output.write("Симптомы: Не удалось загрузить\n\n")
 
             # Рекомендации
@@ -167,7 +166,7 @@ def format_anamnesis_text(
     return result
 
 
-def generate_filename(user_id: int, full_name: Optional[str] = None) -> str:
+def generate_filename(user_id: int, full_name: str | None = None) -> str:
     """
     Генерирует имя файла для экспорта
 

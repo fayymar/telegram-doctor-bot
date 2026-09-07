@@ -1,7 +1,9 @@
-import os
 import asyncio
+import os
 from functools import partial
-from supabase import create_client, Client
+
+from supabase import Client, create_client
+
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)

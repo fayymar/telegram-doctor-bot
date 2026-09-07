@@ -1,5 +1,5 @@
 """Fallback обработчик для зависших FSM состояний и необработанных сообщений."""
-from aiogram import Router, F
+from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
@@ -61,5 +61,5 @@ async def fallback_handler(message: Message, state: FSMContext):
                 "Выберите действие из меню:",
                 reply_markup=get_main_menu()
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to send fallback menu: {e}")

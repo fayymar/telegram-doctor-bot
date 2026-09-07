@@ -1,11 +1,10 @@
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import datetime, timedelta, timezone
 
 from services.ai_service import AIService
-from services.symptom_parser import parse_symptoms
 from services.red_flags import detect_red_flags
-from utils.logger import setup_logger
+from services.symptom_parser import parse_symptoms
 from utils.json_parser import safe_parse_json_array
+from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -66,8 +65,8 @@ def get_recent_health_metrics(user_id: int, supabase_client, hours: int = 24) ->
         "has_any_data": False,
     }
     try:
-        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
-        fresh_cutoff = (datetime.utcnow() - timedelta(hours=6)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        fresh_cutoff = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
 
         resp = (
             supabase_client.table("health_metrics")
@@ -141,7 +140,7 @@ def _time_ago(recorded_at: str) -> str:
     """Возвращает человекочитаемое время назад."""
     try:
         dt = datetime.fromisoformat(recorded_at.replace("Z", "").split("+")[0])
-        diff = datetime.utcnow() - dt
+        diff = datetime.now(timezone.utc) - dt
         minutes = int(diff.total_seconds() / 60)
         if minutes < 60:
             return f"{minutes} мин назад"
@@ -236,7 +235,7 @@ NO — еда, техника, погода, цены, тест, или что �
         return True, ""
 
 
-def check_red_flags(symptoms_text: str, health_metrics: Optional[dict] = None) -> dict:
+def check_red_flags(symptoms_text: str, health_metrics: dict | None = None) -> dict:
     """
     Шаг 1: Проверяет наличие красных флагов (экстренных симптомов).
     Использует services/red_flags.py + опциональные показатели здоровья.
@@ -357,7 +356,7 @@ async def parse_and_generate_questions(symptoms_text: str, user_profile: dict, p
             import re
             match = re.search(r'\[.*\]', cleaned, re.DOTALL)
             cleaned = match.group(0) if match else '[]'
-        logger.info(f"After extract_json_block: {repr(cleaned)}")
+        logger.info(f"After extract_json_block: {cleaned!r}")
         questions = safe_parse_json_array(cleaned, default=[])
         logger.info(f"After safe_parse_json_array: {questions}")
 
@@ -455,13 +454,14 @@ async def get_anamnesis_questions(symptoms_text: str) -> list:
         cleaned = ai_service._extract_json_block(raw)
         questions = safe_parse_json_array(cleaned, default=[])
 
-        valid = []
-        for q in questions:
-            if isinstance(q, dict) and q.get("question") and isinstance(q.get("options"), list):
-                valid.append({
-                    "question": q["question"],
-                    "options": [str(o) for o in q["options"][:4]]
-                })
+        valid = [
+            {
+                "question": q["question"],
+                "options": [str(o) for o in q["options"][:4]]
+            }
+            for q in questions
+            if isinstance(q, dict) and q.get("question") and isinstance(q.get("options"), list)
+        ]
 
         if valid:
             return valid[:2]
@@ -524,7 +524,7 @@ async def get_final_recommendation(
     all_data: dict,
     user_profile: dict,
     patient_history: str = "",
-    health_metrics: Optional[dict] = None,
+    health_metrics: dict | None = None,
     language: str = "ru",
 ) -> dict:
     """

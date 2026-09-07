@@ -1,8 +1,7 @@
 import re
-from typing import Dict, List, Tuple, Any
+from typing import Any
 
 from services.red_flags import detect_red_flags
-
 
 CLUSTERS = [
     "general",
@@ -130,7 +129,7 @@ SYMPTOM_NORMALIZATION_RULES = [
 # 2. Вес симптома по кластерам
 # ---------------------------------------------------------
 
-SYMPTOM_CLUSTER_WEIGHTS: Dict[str, Dict[str, int]] = {
+SYMPTOM_CLUSTER_WEIGHTS: dict[str, dict[str, int]] = {
     "головная боль": {
         "neuro": 3,
         "general": 2,
@@ -391,7 +390,7 @@ def _clean_text(text: str) -> str:
     return text
 
 
-def _split_into_chunks(text: str) -> List[str]:
+def _split_into_chunks(text: str) -> list[str]:
     """
     Делим текст на куски по запятым, точкам, 'и' и т.д.
     """
@@ -423,7 +422,7 @@ def _normalize_chunk(chunk: str) -> str:
     return chunk
 
 
-def _deduplicate_preserve_order(items: List[str]) -> List[str]:
+def _deduplicate_preserve_order(items: list[str]) -> list[str]:
     seen = set()
     result = []
 
@@ -439,7 +438,7 @@ def _deduplicate_preserve_order(items: List[str]) -> List[str]:
     return result
 
 
-def _detect_body_areas(normalized_symptoms: List[str], raw_text: str) -> List[str]:
+def _detect_body_areas(normalized_symptoms: list[str], raw_text: str) -> list[str]:
     text = f"{raw_text.lower()} " + " ".join(s.lower() for s in normalized_symptoms)
 
     areas = []
@@ -487,11 +486,11 @@ def _extract_duration(raw_text: str) -> str | None:
     return None
 
 
-def _get_empty_scores() -> Dict[str, int]:
+def _get_empty_scores() -> dict[str, int]:
     return {cluster: 0 for cluster in CLUSTERS}
 
 
-def _apply_symptom_scores(normalized_symptoms: List[str]) -> Dict[str, int]:
+def _apply_symptom_scores(normalized_symptoms: list[str]) -> dict[str, int]:
     scores = _get_empty_scores()
 
     for symptom in normalized_symptoms:
@@ -502,7 +501,7 @@ def _apply_symptom_scores(normalized_symptoms: List[str]) -> Dict[str, int]:
     return scores
 
 
-def _apply_combination_bonuses(normalized_symptoms: List[str], scores: Dict[str, int]) -> Dict[str, int]:
+def _apply_combination_bonuses(normalized_symptoms: list[str], scores: dict[str, int]) -> dict[str, int]:
     symptom_set = {s.lower() for s in normalized_symptoms}
 
     for combo in COMBINATION_BONUSES:
@@ -515,10 +514,10 @@ def _apply_combination_bonuses(normalized_symptoms: List[str], scores: Dict[str,
 
 
 def _apply_context_adjustments(
-    normalized_symptoms: List[str],
+    normalized_symptoms: list[str],
     raw_text: str,
-    scores: Dict[str, int]
-) -> Dict[str, int]:
+    scores: dict[str, int]
+) -> dict[str, int]:
     text = raw_text.lower()
 
     if "боль внизу живота" in normalized_symptoms:
@@ -550,12 +549,12 @@ def _apply_context_adjustments(
     return scores
 
 
-def _rank_clusters(scores: Dict[str, int]) -> List[Tuple[str, int]]:
+def _rank_clusters(scores: dict[str, int]) -> list[tuple[str, int]]:
     ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
     return ranked
 
 
-def _determine_confidence(ranked_clusters: List[Tuple[str, int]]) -> str:
+def _determine_confidence(ranked_clusters: list[tuple[str, int]]) -> str:
     if not ranked_clusters:
         return "low"
 
@@ -579,7 +578,7 @@ def _determine_confidence(ranked_clusters: List[Tuple[str, int]]) -> str:
 # 5. Главная функция
 # ---------------------------------------------------------
 
-def parse_symptoms(raw_text: str) -> Dict[str, Any]:
+def parse_symptoms(raw_text: str) -> dict[str, Any]:
     """
     Главная функция парсинга симптомов.
 

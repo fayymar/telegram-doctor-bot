@@ -1,11 +1,14 @@
 """Middleware для бота"""
 import time
-from typing import Callable, Dict, Any, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from aiogram import BaseMiddleware
-from aiogram.types import Message, TelegramObject
 from aiogram.fsm.context import FSMContext
-from utils.logger import setup_logger
+from aiogram.types import Message, TelegramObject
+
 from config import FSM_TIMEOUT
+from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -20,9 +23,9 @@ class FSMTimeoutMiddleware(BaseMiddleware):
 
     async def __call__(
         self,
-        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
         event: TelegramObject,
-        data: Dict[str, Any]
+        data: dict[str, Any]
     ) -> Any:
         """
         Обработчик middleware
