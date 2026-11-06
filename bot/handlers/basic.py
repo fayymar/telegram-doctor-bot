@@ -45,128 +45,32 @@ def get_language_keyboard() -> ReplyKeyboardMarkup:
 def _get_start_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="📱 Продолжить в Telegram", callback_data="start_telegram"),
-        InlineKeyboardButton(text="🌐 Ввести код веб-версии", callback_data="start_web"),
+        InlineKeyboardButton(text="🌐 Войти на сайт", callback_data="start_web"),
     ]])
 
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
-    """Обработчик /start — поддерживает deep link auth_XXXXXX"""
-    from datetime import datetime as _dt
-    from datetime import timezone
-
-    from bot.shared import web_auth_codes
-
-    user_id = message.from_user.id
+    """Обработчик /start. Deep link /start login — выдаёт код для сайта."""
     first_name = message.from_user.first_name or "друг"
 
-    # Deep link: /start auth_123456
     args = message.text.split(maxsplit=1)
     payload = args[1].strip() if len(args) > 1 else ""
 
-    if payload.startswith("auth_"):
-        code = payload[5:]
-        entry = web_auth_codes.get(code)
-
-        if not entry:
-            await message.answer(
-                "❌ Код не найден или уже истёк.\n\n"
-                "Вернитесь на сайт и получите новый код.",
-                reply_markup=_get_start_keyboard(),
-            )
-            return
-
-        age = (_dt.now(timezone.utc) - entry["created_at"]).total_seconds()
-        if age > 600:
-            web_auth_codes.pop(code, None)
-            await message.answer(
-                "⏰ Код истёк (действует 10 минут).\n\n"
-                "Вернитесь на сайт и получите новый код.",
-                reply_markup=_get_start_keyboard(),
-            )
-            return
-
-        if entry["verified"]:
-            await message.answer("✅ Этот код уже использован.", reply_markup=_get_start_keyboard())
-            return
-
-        user = message.from_user
-        entry["verified"] = True
-        entry["telegram_id"] = user.id
-        entry["first_name"] = user.first_name or ""
-        entry["last_name"] = user.last_name or ""
-        entry["username"] = user.username or ""
-        entry["photo_url"] = None
-
-        logger.info(f"Deep-link auth {code} verified for user_id={user.id}")
-
-        await message.answer(
-            f"✅ Вы успешно вошли в Symed, {first_name}!\n\n"
-            "Вернитесь на сайт — страница автоматически обновится.",
-            reply_markup=_get_start_keyboard(),
-        )
+    if payload in ("login", "link"):
+        await _send_site_code(message)
         return
 
-    if payload.startswith("link_"):
-        code = payload[5:]
-        from datetime import datetime as _dt2
-        from datetime import timezone
-
-        from bot.shared import link_codes
-        from database.connection import supabase_client as _sb
-
-        entry = link_codes.get(code)
-        if not entry:
-            await message.answer("❌ Код привязки не найден или истёк.\n\nОткройте Symed → Профиль → Подключить Telegram.")
-            return
-
-        age = (_dt2.now(timezone.utc) - entry["created_at"]).total_seconds()
-        if age > 600:
-            link_codes.pop(code, None)
-            await message.answer("⏰ Код истёк (10 минут). Получите новый в Symed.")
-            return
-
-        if entry.get("verified"):
-            await message.answer("✅ Аккаунты уже связаны.")
-            return
-
-        tg_id  = message.from_user.id
-        web_id = entry["web_user_id"]
-
-        try:
-            tg_resp  = await run_query(lambda: _sb.table("user_profiles").select("*").eq("user_id", tg_id).limit(1).execute())
-            web_resp = await run_query(lambda: _sb.table("user_profiles").select("*").eq("user_id", web_id).limit(1).execute())
-            tg_profile  = tg_resp.data[0]  if tg_resp.data  else {}
-            web_profile = web_resp.data[0] if web_resp.data else {}
-
-            merge_fields = ["birthdate", "gender", "height", "weight", "phone",
-                            "chronic_diseases", "drug_allergies", "smoking",
-                            "hereditary", "physical_activity"]
-            update_web = {"linked_telegram_id": str(tg_id)}
-            for field in merge_fields:
-                if tg_profile.get(field) and not web_profile.get(field):
-                    update_web[field] = tg_profile[field]
-            if not web_profile.get("full_name") and tg_profile.get("full_name"):
-                update_web["full_name"] = tg_profile["full_name"]
-
-            await run_query(lambda: _sb.table("user_profiles").upsert({"user_id": web_id, **update_web}, on_conflict="user_id").execute())
-            await run_query(lambda: _sb.table("user_profiles").upsert({"user_id": tg_id, "linked_web_id": str(web_id)}, on_conflict="user_id").execute())
-
-            entry["verified"]    = True
-            entry["telegram_id"] = tg_id
-            link_codes[code]     = entry
-
-            logger.info(f"Deep-link account linked: tg={tg_id} <-> web={web_id}")
-            await message.answer(
-                f"✅ <b>Аккаунты успешно связаны, {first_name}!</b>\n\n"
-                "Ваши данные в Telegram и на сайте Symed теперь синхронизированы. "
-                "Вернитесь на сайт — он уже обновился.",
-                parse_mode="HTML",
-                reply_markup=_get_start_keyboard(),
-            )
-        except Exception as e:
-            logger.error(f"Deep-link link error: {e}", exc_info=True)
-            await message.answer("⚠️ Ошибка при связывании. Попробуйте ещё раз.")
+    if payload.startswith(("auth_", "link_")):
+        # Старые ссылки: раньше сайт показывал код, а бот его подтверждал.
+        # Это позволяло фишинг (чужая ссылка = вход злоумышленника под вами),
+        # поэтому такие ссылки больше ничего не делают.
+        await message.answer(
+            "ℹ️ Этот способ входа больше не используется.\n\n"
+            "Чтобы войти на сайт Symed или привязать Telegram, отправьте /login — "
+            "бот пришлёт код, который нужно ввести на сайте.",
+            reply_markup=_get_start_keyboard(),
+        )
         return
 
     # Обычный /start
@@ -213,17 +117,39 @@ async def start_telegram(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "start_web")
 async def start_web(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "🌐 <b>Авторизация на сайте Symed</b>\n\n"
-        "1. Откройте <a href=\"https://symed-web.vercel.app/auth\">symed-web.vercel.app/auth</a>\n"
-        "2. Нажмите <b>«Войти через Telegram»</b> — код подтвердится автоматически\n\n"
-        "<i>Или скопируйте 6-значный код и отправьте его сюда вручную.</i>",
+    await callback.message.delete()
+    await _send_site_code(callback.message, user=callback.from_user)
+    await callback.answer()
+
+
+async def _send_site_code(message: Message, user=None) -> None:
+    """Отправляет пользователю одноразовый код для входа/привязки на сайте."""
+    from bot.shared import issue_site_code, site_code_message
+    # Код — это ключ к аккаунту: выдаём его только в личном чате с ботом,
+    # иначе в группе его увидят все участники.
+    if message.chat.type != "private":
+        bot_user = await message.bot.get_me()
+        await message.answer(
+            "🔒 Код для входа можно получить только в личном чате с ботом.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Открыть личный чат", url=f"https://t.me/{bot_user.username}?start=login"),
+            ]]),
+        )
+        return
+    code = issue_site_code(user or message.from_user)
+    await message.answer(
+        site_code_message(code),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="↩️ Назад", callback_data="back_to_start"),
+            InlineKeyboardButton(text="🌐 Открыть сайт", url=f"{WEBAPP_URL}/auth"),
         ]]),
     )
-    await callback.answer()
+
+
+@router.message(Command("login"))
+async def cmd_login(message: Message):
+    """/login — код для входа на сайт или привязки Telegram в профиле."""
+    await _send_site_code(message)
 
 
 @router.callback_query(F.data == "back_to_start")
@@ -405,121 +331,11 @@ async def cmd_heartrate(message: Message):
     )
 
 
-@router.message(F.text.regexp(r'^\d{6}$'))
-async def handle_web_auth_code(message: Message):
-    """Обработчик ручного ввода 6-значных кодов."""
-    from bot.shared import web_auth_codes
-    code = message.text.strip()
-    entry = web_auth_codes.get(code)
-    if not entry:
-        await message.answer("❌ Код не найден или уже истёк.\n\nОткройте symed-web.vercel.app и получите новый код.")
-        return
-    from datetime import datetime as _dt
-    from datetime import timezone
-    age = (_dt.now(timezone.utc) - entry['created_at']).total_seconds()
-    if age > 600:
-        web_auth_codes.pop(code, None)
-        await message.answer("⏰ Код истёк (действует 10 минут).\n\nОткройте symed-web.vercel.app и получите новый код.")
-        return
-    if entry['verified']:
-        await message.answer("✅ Этот код уже использован.")
-        return
-    user = message.from_user
-    entry['verified'] = True
-    entry['telegram_id'] = user.id
-    entry['first_name'] = user.first_name or ''
-    entry['last_name'] = user.last_name or ''
-    entry['username'] = user.username or ''
-    entry['photo_url'] = None
-    logger.info(f'Web auth code {code} verified for user_id={user.id}')
-    await message.answer("✅ Вы успешно вошли в Symed!\n\nВернитесь на сайт — страница автоматически обновится.")
-
-
 @router.message(Command("link"))
 async def cmd_link(message: Message) -> None:
-    """Привязка Telegram-аккаунта к веб-профилю: /link КОД"""
-
-    from bot.shared import link_codes
-    from database.connection import run_query, supabase_client
-
-    parts = (message.text or "").strip().split()
-    if len(parts) < 2:
-        await message.answer(
-            "🔗 <b>Привязка аккаунта</b>\n\n"
-            "Откройте Symed → Профиль → <b>Подключить Telegram</b>, "
-            "получите код и введите:\n<code>/link КОД</code>",
-            parse_mode="HTML"
-        )
-        return
-
-    code = parts[1].strip()
-    entry = link_codes.get(code)
-
-    if not entry:
-        await message.answer("❌ Код не найден или истёк.\n\nОткройте Symed → Профиль → Подключить Telegram.")
-        return
-
-    from datetime import datetime as _dt
-    from datetime import timezone
-    age = (_dt.now(timezone.utc) - entry["created_at"]).total_seconds()
-    if age > 600:
-        link_codes.pop(code, None)
-        await message.answer("⏰ Код истёк (10 минут).\n\nПолучите новый код в Symed.")
-        return
-
-    if entry.get("verified"):
-        await message.answer("✅ Этот код уже использован.")
-        return
-
-    tg_user    = message.from_user
-    tg_id      = tg_user.id
-    web_id     = entry["web_user_id"]
-
-    try:
-        # Load both profiles
-        tg_resp  = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", tg_id).limit(1).execute())
-        web_resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", web_id).limit(1).execute())
-
-        tg_profile  = tg_resp.data[0]  if tg_resp.data  else {}
-        web_profile = web_resp.data[0] if web_resp.data else {}
-
-        # Merge: copy non-null Telegram fields into web profile (don't overwrite existing)
-        merge_fields = ["birthdate", "gender", "height", "weight", "phone",
-                        "chronic_diseases", "drug_allergies", "smoking",
-                        "hereditary", "physical_activity"]
-        update_web = {"linked_telegram_id": str(tg_id)}
-        for field in merge_fields:
-            tg_val  = tg_profile.get(field)
-            web_val = web_profile.get(field)
-            if tg_val and not web_val:
-                update_web[field] = tg_val
-
-        # Also merge full_name if web is missing
-        if not web_profile.get("full_name") and tg_profile.get("full_name"):
-            update_web["full_name"] = tg_profile["full_name"]
-
-        # Update web profile
-        await run_query(lambda: supabase_client.table("user_profiles").upsert(
-            {"user_id": web_id, **update_web}, on_conflict="user_id"
-        ).execute())
-
-        # Update telegram profile: store linked_web_id
-        await run_query(lambda: supabase_client.table("user_profiles").upsert(
-            {"user_id": tg_id, "linked_web_id": str(web_id)}, on_conflict="user_id"
-        ).execute())
-
-        entry["verified"]    = True
-        entry["telegram_id"] = tg_id
-        link_codes[code]     = entry
-
-        await message.answer(
-            "✅ <b>Аккаунты успешно связаны!</b>\n\n"
-            "Теперь ваши данные в Telegram и на сайте Symed синхронизированы. "
-            "История консультаций и профиль — общие.",
-            parse_mode="HTML"
-        )
-        logger.info(f"Account linked: telegram_id={tg_id} <-> web_id={web_id}")
-
-    except Exception as e:
-        logger.error(f"Link error: {e}", exc_info=True)
-        await message.answer("⚠️ Ошибка при связывании. Попробуйте ещё раз.")
+    """Привязка теперь делается на сайте кодом из бота."""
+    await message.answer(
+        "🔗 Чтобы привязать Telegram к аккаунту на сайте, откройте Symed → Профиль → "
+        "«Подключить Telegram» и введите код, который пришлёт бот.",
+    )
+    await _send_site_code(message)

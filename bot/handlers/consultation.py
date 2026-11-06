@@ -171,7 +171,7 @@ async def process_symptoms(message: Message, state: FSMContext):
         logger.error(f"DB error getting profile: {e}", exc_info=True)
 
     # Получаем историю предыдущих консультаций
-    patient_history = get_patient_history(message.from_user.id, supabase_client)
+    patient_history = await run_query(get_patient_history, message.from_user.id, supabase_client)
 
     # Шаг 2: Генерируем уточняющие вопросы (фильтруем вопросы о давности — они задаются отдельно)
     questions_raw = await parse_and_generate_questions(symptoms_text, user_profile, patient_history)
@@ -430,16 +430,31 @@ async def _advance_anamnesis(msg, state: FSMContext, questions: list, next_index
 async def handle_feedback(call: CallbackQuery):
     """Обработка обратной связи после консультации."""
     parts = call.data.split(":")
-    verdict = parts[1] if len(parts) > 1 else "unknown"
-    user_id = parts[2] if len(parts) > 2 else "unknown"
+    verdict = parts[1] if len(parts) > 1 else ""
+    # user_id берём из Telegram, а не из callback_data: данные кнопки можно подделать
+    user_id = call.from_user.id
 
-    try:
-        # Сохраняем фидбэк в Supabase
-        await run_query(lambda: supabase_client.table("consultations").update({
-            "feedback": verdict,
-        }).eq("user_id", int(user_id)).order("created_at", desc=True).limit(1).execute())
-    except Exception as e:
-        logger.warning(f"Feedback save error: {e}")
+    if verdict in ("good", "bad"):
+        try:
+            latest = await run_query(
+                lambda: supabase_client.table("consultations")
+                .select("id")
+                .eq("user_id", user_id)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if latest.data:
+                cid = latest.data[0]["id"]
+                await run_query(
+                    lambda: supabase_client.table("consultations")
+                    .update({"rating": verdict})
+                    .eq("id", cid)
+                    .eq("user_id", user_id)
+                    .execute()
+                )
+        except Exception as e:
+            logger.warning(f"Feedback save error: {e}")
 
     if verdict == "good":
         text = "👍 Спасибо! Рады помочь."

@@ -1,4 +1,6 @@
 import asyncio
+import functools
+import ipaddress
 import json
 import logging
 import uuid
@@ -32,6 +34,16 @@ from services.consultation_agent import (
     get_patient_history,
     get_recent_health_metrics,
     parse_and_generate_questions,
+)
+from security.auth import (
+    SCOPE_METRICS,
+    SCOPE_SESSION,
+    bearer_token,
+    derive_web_user_id,
+    issue_token,
+    verify_login_widget,
+    verify_token,
+    verify_webapp_init_data,
 )
 from utils.logger import setup_logger
 
@@ -69,6 +81,16 @@ dp.include_router(fallback.router)    # Fallback для зависших FSM (В
 
 # Хранилище сессий в памяти (для MVP)
 consultation_sessions: dict = {}
+_MAX_CONSULTATION_SESSIONS = 2000
+
+# Ссылки на фоновые задачи: без них asyncio может собрать задачу сборщиком мусора
+_background_tasks: set = set()
+
+
+def _spawn(coro) -> None:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 # Хранилище кодов авторизации для Web — shared с bot handlers
 import time as _time
@@ -76,28 +98,42 @@ import time as _time
 # ── Rate limiting (in-memory, resets on redeploy) ──────────────────────────
 from collections import defaultdict
 
-from bot.shared import link_codes, web_auth_codes
+from bot.shared import redeem_site_code, site_codes
 
-_rate_counters: dict = defaultdict(list)  # ip → [timestamps]
-_RATE_LIMIT = 60       # max requests
-_RATE_WINDOW = 60      # per N seconds
+_rate_counters: dict = defaultdict(list)  # (bucket, ip) → [timestamps]
 
-def _is_rate_limited(request: web.Request) -> bool:
-    """Simple IP-based rate limiting. Returns True if request should be blocked."""
-    ip = request.headers.get("X-Forwarded-For", request.remote or "unknown").split(",")[0].strip()
+
+def _client_ip(request: web.Request) -> str:
+    """
+    IP клиента для rate limit. На Render перед приложением стоит Cloudflare,
+    который всегда перезаписывает CF-Connecting-IP реальным адресом клиента.
+    Другим заголовкам не доверяем: True-Client-IP Cloudflare выставляет только
+    на Enterprise-тарифе (иначе пропускает значение клиента), а X-Forwarded-For
+    клиент может дописать сам, и его последнее значение — адрес прокси.
+    """
+    value = request.headers.get("CF-Connecting-IP", "").strip()
+    if value:
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError:
+            pass
+    return request.remote or "unknown"
+
+
+def _is_rate_limited(request: web.Request, bucket: str = "default", limit: int = 60, window: int = 60) -> bool:
+    """Простой rate limit по IP в памяти. True — запрос надо отклонить."""
+    key = (bucket, _client_ip(request))
     now = _time.time()
-    window_start = now - _RATE_WINDOW
-    timestamps = _rate_counters[ip]
-    # Remove old timestamps
-    _rate_counters[ip] = [t for t in timestamps if t > window_start]
-    # Evict stale IPs to prevent unbounded memory growth
+    window_start = now - window
+    _rate_counters[key] = [t for t in _rate_counters[key] if t > window_start]
+    # Чистим устаревшие ключи, чтобы память не росла бесконечно
     if len(_rate_counters) > 10_000:
-        stale_ips = [k for k, v in _rate_counters.items() if not v or v[-1] < window_start]
-        for k in stale_ips[:5_000]:
+        stale = [k for k, v in _rate_counters.items() if not v or v[-1] < now - 3600]
+        for k in stale:
             del _rate_counters[k]
-    if len(_rate_counters[ip]) >= _RATE_LIMIT:
+    if len(_rate_counters[key]) >= limit:
         return True
-    _rate_counters[ip].append(now)
+    _rate_counters[key].append(now)
     return False
 
 
@@ -121,7 +157,7 @@ def _get_cors_headers(request: web.Request) -> dict:
     return {
         "Access-Control-Allow-Origin": allowed,
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
         "Vary": "Origin",
     }
 
@@ -135,11 +171,66 @@ def json_response(data: dict, status: int = 200) -> web.Response:
     )
 
 
+# ── Авторизация API ───────────────────────────────────────────────────────────
+
+def _unauthorized() -> web.Response:
+    return json_response({"error": "unauthorized"}, status=401)
+
+
+def _forbidden() -> web.Response:
+    return json_response({"error": "forbidden"}, status=403)
+
+
+def _token_user_id(request: web.Request, scopes: tuple[str, ...] = (SCOPE_SESSION,)) -> int | None:
+    token = bearer_token(request.headers)
+    return verify_token(token, scopes) if token else None
+
+
+def auth_required(handler):
+    """
+    Требует валидный токен сессии. Кладёт user_id в request["user_id"].
+    Если в URL есть {user_id} — он обязан совпадать с владельцем токена,
+    иначе 403 (нельзя читать/менять чужие данные, подставив чужой ID).
+    """
+    @functools.wraps(handler)
+    async def wrapper(request: web.Request) -> web.Response:
+        uid = _token_user_id(request)
+        if uid is None:
+            return _unauthorized()
+        path_uid = request.match_info.get("user_id")
+        if path_uid is not None:
+            try:
+                if int(path_uid) != uid:
+                    return _forbidden()
+            except ValueError:
+                return json_response({"error": "invalid user_id"}, status=400)
+        request["user_id"] = uid
+        return await handler(request)
+    return wrapper
+
+
+async def _metrics_user_id(request: web.Request, body: dict) -> int | None:
+    """
+    Для эндпоинтов приёма показателей (iPhone Shortcut / Apple Watch):
+    принимает токен сессии ИЛИ специальный токен метрик — из заголовка
+    Authorization или из поля "token" в теле (в Shortcuts так проще настроить).
+    """
+    token = bearer_token(request.headers) or (body.get("token") if isinstance(body, dict) else None)
+    if not token:
+        return None
+    return verify_token(str(token), (SCOPE_SESSION, SCOPE_METRICS))
+
+
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
     cors_headers = _get_cors_headers(request)
     if request.method == "OPTIONS":
         return web.Response(status=204, headers=cors_headers)
+    if request.path.startswith("/api/") and _is_rate_limited(request, "api", limit=120, window=60):
+        response = _rate_limit_response()
+        for key, value in cors_headers.items():
+            response.headers[key] = value
+        return response
     try:
         response = await handler(request)
     except web.HTTPException as e:
@@ -168,23 +259,26 @@ async def health_check(request):
 # ── API endpoints ──────────────────────────────────────────────
 
 async def api_consultation_start(request: web.Request) -> web.Response:
-    """POST /api/consultation/start"""
-    if _is_rate_limited(request):
+    """
+    POST /api/consultation/start
+    Гость — без токена. Авторизованный пользователь — с Authorization: Bearer,
+    тогда учитываются его профиль, история и показатели. user_id из тела
+    запроса НЕ принимается: только из токена.
+    """
+    if _is_rate_limited(request, "ai", limit=10, window=60):
         return _rate_limit_response()
     try:
         body = await request.json()
-    except Exception as e:
-        logger.warning(f"Consultation start: failed to parse JSON body: {e}")
+    except Exception:
         return json_response({"error": "Invalid JSON body"}, status=400)
 
-    logger.info(f"Consultation start request body: {body}")
-
-    user_id = body.get("user_id")
-    symptoms = body.get("symptoms", "").strip()
+    user_id = _token_user_id(request)
+    symptoms = str(body.get("symptoms", "")).strip()
 
     if not symptoms:
-        logger.warning(f"Consultation start: missing symptoms, body={body}")
         return json_response({"error": "Missing required field: symptoms"}, status=400)
+    if len(symptoms) > 2000:
+        return json_response({"error": "Symptoms text is too long (max 2000 chars)"}, status=400)
 
     # Получаем профиль пользователя из Supabase (только если есть user_id)
     user_profile = {}
@@ -192,13 +286,12 @@ async def api_consultation_start(request: web.Request) -> web.Response:
     health_metrics = {"has_any_data": False}
     if user_id:
         try:
-            resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", int(user_id)).limit(1).execute())
+            resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", user_id).limit(1).execute())
             user_profile = (resp.data[0] if resp.data else {})
         except Exception:
             user_profile = {}
-        patient_history = get_patient_history(user_id, supabase_client)
-        health_metrics = get_recent_health_metrics(user_id, supabase_client, hours=24)
-    logger.info(f"Health metrics for user_id={user_id}: has_data={health_metrics.get('has_any_data')}")
+        patient_history = await run_query(get_patient_history, user_id, supabase_client)
+        health_metrics = await run_query(get_recent_health_metrics, user_id, supabase_client, hours=24)
 
     # Шаг 1: Красные флаги (с учётом метрик)
     try:
@@ -218,13 +311,18 @@ async def api_consultation_start(request: web.Request) -> web.Response:
 
     if questions is None:
         # AI determined the input isn't a medical symptom description
-        logger.info(f"Non-medical input rejected: {symptoms[:100]!r}")
+        logger.info("Non-medical input rejected")
         return json_response({
             "error": "not_medical",
             "message": "Похоже, это не описание симптомов. Опишите, что вас беспокоит (например: болит голова, температура, кашель).",
         }, status=422)
 
     session_id = str(uuid.uuid4())
+    # Ограничиваем число сессий в памяти: при переполнении удаляем самые старые
+    if len(consultation_sessions) >= _MAX_CONSULTATION_SESSIONS:
+        oldest = sorted(consultation_sessions, key=lambda k: consultation_sessions[k].get("_created_at"))
+        for sid in oldest[: len(consultation_sessions) - _MAX_CONSULTATION_SESSIONS + 1]:
+            consultation_sessions.pop(sid, None)
     consultation_sessions[session_id] = {
         "_created_at": datetime.now(timezone.utc),
         "user_id": user_id,
@@ -236,6 +334,7 @@ async def api_consultation_start(request: web.Request) -> web.Response:
         "anamnesis_questions": [],
         "anamnesis_answers": [],
         "health_metrics": health_metrics,
+        "red_flag": red_flag,
     }
 
     return json_response({
@@ -246,6 +345,22 @@ async def api_consultation_start(request: web.Request) -> web.Response:
     })
 
 
+def _get_owned_session(request: web.Request, session_id) -> dict | None:
+    """
+    Возвращает сессию консультации, если она принадлежит текущему пользователю.
+    Гостевые сессии (без user_id) доступны по одному session_id (это UUID4).
+    """
+    if not session_id:
+        return None
+    session = consultation_sessions.get(str(session_id))
+    if not session:
+        return None
+    owner = session.get("user_id")
+    if owner is not None and _token_user_id(request) != owner:
+        return None
+    return session
+
+
 async def api_consultation_answer(request: web.Request) -> web.Response:
     """POST /api/consultation/answer"""
     try:
@@ -253,31 +368,34 @@ async def api_consultation_answer(request: web.Request) -> web.Response:
     except Exception:
         return json_response({"error": "Invalid JSON"}, status=400)
 
-    logger.info(f"Consultation answer: {body}")
-
     session_id = body.get("session_id")
     if not session_id:
         return json_response({"error": "session_id is required"}, status=400)
 
-    session = consultation_sessions.get(session_id)
+    session = _get_owned_session(request, session_id)
     if not session:
         return json_response({"error": "Session not found"}, status=404)
 
     try:
         answers = body.get("answers", [])
+        if not isinstance(answers, list):
+            return json_response({"error": "'answers' must be a list"}, status=400)
         questions = session["questions"]
+        # Ответов не может быть больше, чем задано вопросов: иначе большой
+        # список из запроса целиком остался бы в памяти до истечения сессии
+        answers = answers[:max(len(questions), 1)]
 
         # Сохраняем каждый ответ, сопоставляя с вопросом по индексу
         paired = []
         for i, ans in enumerate(answers):
             q_text = questions[i]["question"] if i < len(questions) else ""
-            paired.append({"question": q_text, "answer": str(ans)})
+            paired.append({"question": q_text, "answer": str(ans)[:500]})
         session["answers"] = paired
 
         return json_response({"next_step": "duration"})
     except Exception as e:
         logger.error(f"Consultation answer error: {e}", exc_info=True)
-        return json_response({"error": str(e)}, status=500)
+        return json_response({"error": "Internal server error"}, status=500)
 
 
 async def api_consultation_duration(request: web.Request) -> web.Response:
@@ -287,17 +405,17 @@ async def api_consultation_duration(request: web.Request) -> web.Response:
     except Exception:
         return json_response({"error": "Invalid JSON"}, status=400)
 
-    logger.info(f"Consultation duration: {body}")
-
     session_id = body.get("session_id")
-    duration = body.get("duration", "")
+    duration = str(body.get("duration", ""))[:200]
 
     if not session_id:
         return json_response({"error": "session_id is required"}, status=400)
 
-    session = consultation_sessions.get(session_id)
+    session = _get_owned_session(request, session_id)
     if not session:
         return json_response({"error": "Session not found"}, status=404)
+    if _is_rate_limited(request, "ai", limit=10, window=60):
+        return _rate_limit_response()
 
     try:
         session["duration"] = duration
@@ -315,7 +433,7 @@ async def api_consultation_duration(request: web.Request) -> web.Response:
         return json_response({"anamnesis_questions": normalized, "needs_fresh_metrics": []})
     except Exception as e:
         logger.error(f"Consultation duration error: {e}", exc_info=True)
-        return json_response({"error": str(e)}, status=500)
+        return json_response({"error": "Internal server error"}, status=500)
 
 
 async def api_consultation_result(request: web.Request) -> web.Response:
@@ -325,19 +443,22 @@ async def api_consultation_result(request: web.Request) -> web.Response:
     except Exception:
         return json_response({"error": "Invalid JSON"}, status=400)
 
-    logger.info(f"Consultation result: {body}")
-
     session_id = body.get("session_id")
     if not session_id:
         return json_response({"error": "session_id is required"}, status=400)
 
-    session = consultation_sessions.get(session_id)
+    session = _get_owned_session(request, session_id)
     if not session:
         return json_response({"error": "Session not found"}, status=404)
+    if _is_rate_limited(request, "ai", limit=10, window=60):
+        return _rate_limit_response()
 
     try:
         # Анамнестические ответы могут быть переданы в теле запроса (плоский список строк или список dict)
         raw_anamnesis = body.get("anamnesis_answers", session.get("anamnesis_answers", []))
+        if not isinstance(raw_anamnesis, list):
+            raw_anamnesis = []
+        raw_anamnesis = raw_anamnesis[:10]
         # Нормализуем: если пришли строки — сопоставляем с вопросами из сессии
         if raw_anamnesis and isinstance(raw_anamnesis[0], str):
             qs = session.get("anamnesis_questions", [])
@@ -357,33 +478,29 @@ async def api_consultation_result(request: web.Request) -> web.Response:
             "anamnesis_answers": anamnesis_answers,
         }
 
-        # user_profile может отсутствовать в упрощённых сессиях — подгружаем при необходимости
         user_profile = session.get("user_profile") or {}
-        if not user_profile:
-            try:
-                resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", int(session["user_id"])).limit(1).execute())
-                user_profile = (resp.data[0] if resp.data else {})
-            except Exception:
-                pass
 
         recommendation = await get_final_recommendation(
             all_data,
             user_profile,
             health_metrics=session.get("health_metrics"),
+            red_flag=bool(session.get("red_flag")),
         )
 
         # Сохраняем в Supabase (только для авторизованных пользователей)
         specialists_raw = recommendation.get("specialists", [])
+        consultation_id = None
         if session.get("user_id"):
             try:
                 recommended_doctor = specialists_raw[0]["name"] if specialists_raw else "Терапевт"
-                await run_query(lambda: supabase_client.table("consultations").insert({
+                saved = await run_query(lambda: supabase_client.table("consultations").insert({
                     "user_id": session["user_id"],
                     "symptoms": json.dumps({"text": session["symptoms"], "history": [a for a in session["answers"] if a]}, ensure_ascii=False),
                     "questions_answers": json.dumps(all_data, ensure_ascii=False),
                     "recommended_doctor": recommended_doctor,
                     "urgency_level": recommendation.get("urgency", "medium"),
                 }).execute())
+                consultation_id = (saved.data or [{}])[0].get("id")
             except Exception as e:
                 logger.error(f"Failed to save consultation to Supabase: {e}", exc_info=True)
 
@@ -402,6 +519,7 @@ async def api_consultation_result(request: web.Request) -> web.Response:
         logger.info(f"Session {session_id} cleaned up after result")
 
         return json_response({
+            "consultation_id": consultation_id,
             "recommendation": recommendation.get("recommendation", recommendation.get("urgency_reason", "")),
             "specialists": specialists_out,
             "urgency": recommendation.get("urgency", "medium"),
@@ -411,7 +529,7 @@ async def api_consultation_result(request: web.Request) -> web.Response:
 
     except Exception as e:
         logger.error(f"Consultation result error: {e}", exc_info=True)
-        return json_response({"error": str(e)}, status=500)
+        return json_response({"error": "Internal server error"}, status=500)
 
 
 _PROFILE_FIELDS = [
@@ -420,24 +538,20 @@ _PROFILE_FIELDS = [
 ]
 
 
+@auth_required
 async def api_profile_get(request: web.Request) -> web.Response:
     """GET /api/profile/{user_id} — читает из таблицы user_profiles по user_id"""
-    user_id = request.match_info.get("user_id")
-    if not user_id:
-        return json_response({"error": "user_id is required"}, status=400)
-
-    logger.info(f"Profile GET request: user_id={user_id}")
+    user_id = request["user_id"]
 
     try:
         resp = await run_query(
             lambda: supabase_client.table("user_profiles")
             .select(", ".join(_PROFILE_FIELDS))
-            .eq("user_id", int(user_id))
+            .eq("user_id", user_id)
             .limit(1)
             .execute()
         )
         rows = resp.data or []
-        logger.info(f"Profile GET result: user_id={user_id}, exists={bool(rows)}, data={rows}")
         if not rows:
             return json_response({"exists": False, "profile": None})
 
@@ -446,42 +560,39 @@ async def api_profile_get(request: web.Request) -> web.Response:
         return json_response({"exists": True, "profile": profile})
     except Exception as e:
         logger.error(f"Profile GET error for user {user_id}: {e}", exc_info=True)
-        return json_response({"error": str(e)}, status=500)
+        return json_response({"error": "Internal server error"}, status=500)
 
 
+@auth_required
 async def api_profile_post(request: web.Request) -> web.Response:
     """POST /api/profile/{user_id} — upsert в таблицу user_profiles по user_id"""
-    user_id = request.match_info.get("user_id")
-    if not user_id:
-        return json_response({"error": "user_id is required"}, status=400)
+    user_id = request["user_id"]
 
     try:
         body = await request.json()
     except Exception:
         return json_response({"error": "Invalid JSON"}, status=400)
-
-    logger.info(f"Profile POST request: user_id={user_id}, body={body}")
-    logger.info(f"Saving profile fields: {list(body.keys())}")
+    if not isinstance(body, dict):
+        return json_response({"error": "Invalid JSON"}, status=400)
 
     # Берём только допустимые поля профиля
     update_data = {k: v for k, v in body.items() if k in _PROFILE_FIELDS}
     if not update_data:
         return json_response({"error": "No valid profile fields provided"}, status=400)
 
-    update_data["user_id"] = int(user_id)
-    logger.info(f"Profile POST upsert data: {update_data}")
+    update_data["user_id"] = user_id
+    logger.info(f"Profile POST: user_id={user_id}, fields={sorted(update_data)}")
 
     try:
         await run_query(lambda: supabase_client.table("user_profiles").upsert(update_data, on_conflict="user_id").execute())
-        logger.info(f"Profile POST success: user_id={user_id}")
         return json_response({"status": "ok"})
     except Exception as e:
         logger.error(f"Profile POST error for user {user_id}: {e}", exc_info=True)
-        return json_response({"error": str(e)}, status=500)
+        return json_response({"error": "Internal server error"}, status=500)
 
 
-def _fetch_heartrate_records(user_id: str) -> list:
-    """Выполняет запрос к Supabase. Использует глобальный supabase_client."""
+def _fetch_heartrate_records(user_id: int) -> list:
+    """Синхронный запрос к Supabase — вызывать только через run_query."""
     resp = (
         supabase_client.table('health_metrics')
         .select('value, recorded_at, source')
@@ -494,74 +605,72 @@ def _fetch_heartrate_records(user_id: str) -> list:
     return resp.data or []
 
 
+@auth_required
 async def api_health_heartrate_get(request: web.Request) -> web.Response:
     """GET /api/health/heartrate/{user_id}"""
-    user_id = request.match_info.get('user_id')
-    if not user_id:
-        return json_response({'error': 'user_id is required'}, status=400)
-
+    user_id = request["user_id"]
     try:
-        records = _fetch_heartrate_records(user_id)
+        records = await run_query(_fetch_heartrate_records, user_id)
     except Exception as e:
         if 'Name or service not known' in str(e):
             logger.warning(f"Heartrate GET DNS error for user_id={user_id}, retrying in 1s: {e}")
             await asyncio.sleep(1)
             try:
-                records = _fetch_heartrate_records(user_id)
+                records = await run_query(_fetch_heartrate_records, user_id)
             except Exception as retry_e:
                 logger.error(f"Heartrate GET retry failed for user_id={user_id}: {retry_e}", exc_info=True)
-                return json_response({'error': str(retry_e)}, status=500)
+                return json_response({'error': 'Internal server error'}, status=500)
         else:
             logger.error(f"Heartrate GET error for user_id={user_id}: {e}", exc_info=True)
-            return json_response({'error': str(e)}, status=500)
+            return json_response({'error': 'Internal server error'}, status=500)
 
-    logger.info(f"Heartrate GET for user_id={user_id}: found {len(records)} records")
     return json_response({'records': records, 'has_data': len(records) > 0})
 
 
 async def api_health_heartrate(request: web.Request) -> web.Response:
-    """POST /api/health/heartrate"""
+    """POST /api/health/heartrate — требует токен сессии или токен метрик."""
     try:
         data = await request.json()
-        logger.info(f"Received heartrate POST: {data}")
-        user_id = data.get('user_id')
-        heartrate = data.get('heartrate')
-        timestamp = data.get('timestamp', datetime.now(timezone.utc).isoformat())
+    except Exception:
+        return json_response({'error': 'Invalid JSON'}, status=400)
+    if not isinstance(data, dict):
+        return json_response({'error': 'Invalid JSON'}, status=400)
 
-        if not heartrate:
-            return json_response({'error': 'heartrate required'}, status=400)
+    user_id = await _metrics_user_id(request, data)
+    if user_id is None:
+        return _unauthorized()
 
-        # Формируем запись — user_id включаем только если он передан
+    try:
+        hr = float(data.get('heartrate'))
+    except (TypeError, ValueError):
+        return json_response({'error': 'heartrate required'}, status=400)
+    if not 20 <= hr <= 250:
+        return json_response({'error': 'heartrate out of range'}, status=400)
+    timestamp = data.get('timestamp') or datetime.now(timezone.utc).isoformat()
+
+    try:
         record = {
+            'user_id': user_id,
             'metric_type': 'heartrate',
-            'value': float(heartrate),
+            'value': hr,
             'unit': 'bpm',
             'recorded_at': timestamp,
-            'source': 'apple_watch'
+            'source': 'apple_watch',
         }
-        if user_id:
-            record['user_id'] = user_id
-
-        # Сохраняем в Supabase таблицу health_metrics
         await run_query(lambda: supabase_client.table('health_metrics').insert(record).execute())
 
-        # Если есть user_id — отправляем уведомление в Telegram
-        if user_id:
-            hr = float(heartrate)
-            if hr > 120 or hr < 50:
-                msg = f"🚨 Пульс: {hr:.0f} уд/мин! Значительно выше нормы. Рекомендуем обратиться к врачу."
-            elif hr > 100:
-                msg = f"❤️ Пульс получен: {hr:.0f} уд/мин ⚠️ Немного выше нормы. Отдохните."
-            else:
-                msg = f"❤️ Пульс получен: {hr:.0f} уд/мин ✅ В норме"
+        if hr > 120 or hr < 50:
+            msg = f"🚨 Пульс: {hr:.0f} уд/мин! Значительно отличается от нормы. Рекомендуем обратиться к врачу."
+        elif hr > 100:
+            msg = f"❤️ Пульс получен: {hr:.0f} уд/мин ⚠️ Немного выше нормы. Отдохните."
+        else:
+            msg = f"❤️ Пульс получен: {hr:.0f} уд/мин ✅ В норме"
+        await bot.send_message(user_id, msg)
 
-            await bot.send_message(user_id, msg)
-
-        return json_response({'status': 'ok', 'message': f'Пульс сохранён: {heartrate} уд/мин'})
-
+        return json_response({'status': 'ok', 'message': f'Пульс сохранён: {hr:.0f} уд/мин'})
     except Exception as e:
-        logger.error(f"Health heartrate error: {e}")
-        return json_response({'error': str(e)}, status=500)
+        logger.error(f"Health heartrate error: {e}", exc_info=True)
+        return json_response({'error': 'Internal server error'}, status=500)
 
 
 def _interpret_heartrate(hr: float) -> str:
@@ -706,14 +815,20 @@ async def send_remeasure_reminder(user_id, abnormal_metrics: list, delay: int = 
 
 
 async def api_health_metrics_post(request: web.Request) -> web.Response:
-    """POST /api/health/metrics — тихое сохранение + отложенный алерт при отклонениях"""
+    """
+    POST /api/health/metrics — тихое сохранение + отложенный алерт при отклонениях.
+    Требует токен сессии или токен метрик (заголовок Authorization или поле "token").
+    """
     try:
         data = await request.json()
-        logger.info(f"Received health metrics POST: {data}")
     except Exception:
         return json_response({'error': 'Invalid JSON'}, status=400)
+    if not isinstance(data, dict):
+        return json_response({'error': 'Invalid JSON'}, status=400)
 
-    user_id = data.get('user_id')
+    user_id = await _metrics_user_id(request, data)
+    if user_id is None:
+        return _unauthorized()
     timestamp = data.get('timestamp') or datetime.now(timezone.utc).isoformat()
 
     # Если передан часовой пояс (формат "+05:00") — конвертируем timestamp в UTC
@@ -754,15 +869,16 @@ async def api_health_metrics_post(request: web.Request) -> web.Response:
             value = float(raw)
         except (TypeError, ValueError):
             continue
+        if not 0 < value < 1_000_000:
+            continue
         row = {
+            'user_id': user_id,
             'metric_type': metric_type,
             'value': value,
             'unit': unit,
             'recorded_at': timestamp,
             'source': 'apple_watch',
         }
-        if user_id:
-            row['user_id'] = user_id
         records_to_insert.append(row)
         received[field] = value
 
@@ -774,30 +890,31 @@ async def api_health_metrics_post(request: web.Request) -> web.Response:
         await run_query(lambda: supabase_client.table('health_metrics').insert(records_to_insert).execute())
     except Exception as e:
         logger.error(f"Health metrics insert error: {e}", exc_info=True)
-        return json_response({'error': str(e)}, status=500)
+        return json_response({'error': 'Internal server error'}, status=500)
 
-    logger.info(f"Silent save for user {user_id}: {received}")
+    logger.info(f"Silent save for user {user_id}: {len(records_to_insert)} metrics")
 
     # Проверка отклонений — если есть, запускаем отложенный алерт через 2 минуты
-    if user_id and _has_deviation(received):
+    if _has_deviation(received):
         abnormal = _get_abnormal_metrics(received)
-        asyncio.create_task(send_delayed_alert(user_id, received, delay=120))
-        asyncio.create_task(send_remeasure_reminder(user_id, abnormal, delay=14400))
-        logger.info(f"Deviation detected for user_id={user_id}, alert in 120s, reminder in 4h, metrics={abnormal}")
+        _spawn(send_delayed_alert(user_id, received, delay=120))
+        _spawn(send_remeasure_reminder(user_id, abnormal, delay=14400))
+        logger.info(f"Deviation detected for user_id={user_id}, alert in 120s, reminder in 4h")
 
     return json_response({'status': 'ok', 'saved': len(records_to_insert)})
 
 
+@auth_required
 async def api_health_metrics_report(request: web.Request) -> web.Response:
     """POST /api/health/metrics/report/{user_id} — ручной отчёт о последних метриках"""
-    user_id = request.match_info.get('user_id')
-    if not user_id:
-        return json_response({'error': 'user_id is required'}, status=400)
+    user_id = request["user_id"]
+    if _is_rate_limited(request, "report", limit=5, window=60):
+        return _rate_limit_response()
 
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-        resp = (
-            supabase_client.table('health_metrics')
+        resp = await run_query(
+            lambda: supabase_client.table('health_metrics')
             .select('metric_type, value, recorded_at')
             .eq('user_id', user_id)
             .gte('recorded_at', cutoff)
@@ -807,7 +924,7 @@ async def api_health_metrics_report(request: web.Request) -> web.Response:
         rows = resp.data or []
     except Exception as e:
         logger.error(f"Report fetch error for user_id={user_id}: {e}", exc_info=True)
-        return json_response({'error': str(e)}, status=500)
+        return json_response({'error': 'Internal server error'}, status=500)
 
     # Берём последнюю запись каждого типа
     seen: dict = {}
@@ -867,20 +984,19 @@ async def api_health_metrics_report(request: web.Request) -> web.Response:
         logger.info(f"Report sent to user_id={user_id}")
     except Exception as e:
         logger.error(f"Report send error for user_id={user_id}: {e}", exc_info=True)
-        return json_response({'error': f'Telegram send failed: {e}'}, status=500)
+        return json_response({'error': 'Telegram send failed'}, status=500)
 
     return json_response({'status': 'ok', 'message': 'Report sent'})
 
 
+@auth_required
 async def api_health_metrics_get(request: web.Request) -> web.Response:
     """GET /api/health/metrics/{user_id}?type=metric_type&limit=10"""
-    user_id = request.match_info.get('user_id')
-    if not user_id:
-        return json_response({'error': 'user_id is required'}, status=400)
+    user_id = request["user_id"]
 
     metric_type = request.rel_url.query.get('type')
     try:
-        limit = int(request.rel_url.query.get('limit', 10))
+        limit = max(1, min(int(request.rel_url.query.get('limit', 10)), 200))
     except ValueError:
         limit = 10
 
@@ -894,48 +1010,31 @@ async def api_health_metrics_get(request: web.Request) -> web.Response:
         )
         if metric_type:
             query = query.eq('metric_type', metric_type)
-        resp = query.execute()
+        resp = await run_query(query.execute)
         records = resp.data or []
-        logger.info(f"Health metrics GET user_id={user_id} type={metric_type}: {len(records)} records")
         return json_response({'records': records, 'has_data': len(records) > 0})
     except Exception as e:
         logger.error(f"Health metrics GET error user_id={user_id}: {e}", exc_info=True)
-        return json_response({'error': str(e)}, status=500)
+        return json_response({'error': 'Internal server error'}, status=500)
 
 
 async def _check_anamnesis_fields():
-    """Проверяет наличие полей анамнеза в user_profiles; пытается добавить их если нет."""
+    """Проверяет наличие полей анамнеза в user_profiles (миграции выполняются вручную)."""
     try:
         await run_query(lambda: supabase_client.table("user_profiles").select(
             "chronic_diseases, drug_allergies, smoking, hereditary"
         ).limit(1).execute())
         logger.info("✅ Anamnesis fields present in user_profiles")
     except Exception as e:
-        logger.warning(f"MISSING FIELDS in user_profiles: {e}")
-        logger.warning("Attempting to add anamnesis fields via SQL migration...")
-        try:
-            await run_query(lambda: supabase_client.rpc("exec_sql", {"query": (
-                "ALTER TABLE user_profiles "
-                "ADD COLUMN IF NOT EXISTS chronic_diseases TEXT[] DEFAULT '{}',"
-                "ADD COLUMN IF NOT EXISTS drug_allergies TEXT DEFAULT '',"
-                "ADD COLUMN IF NOT EXISTS smoking TEXT DEFAULT 'no',"
-                "ADD COLUMN IF NOT EXISTS hereditary TEXT[] DEFAULT '{}';"
-            )}).execute())
-            logger.info("✅ Anamnesis fields added via SQL migration")
-        except Exception as rpc_err:
-            logger.error(
-                f"Cannot add fields automatically (rpc failed: {rpc_err}). "
-                "Please run this SQL manually in Supabase:\n"
-                "ALTER TABLE user_profiles "
-                "ADD COLUMN IF NOT EXISTS chronic_diseases TEXT[] DEFAULT '{}',"
-                "ADD COLUMN IF NOT EXISTS drug_allergies TEXT DEFAULT '',"
-                "ADD COLUMN IF NOT EXISTS smoking TEXT DEFAULT 'no',"
-                "ADD COLUMN IF NOT EXISTS hereditary TEXT[] DEFAULT '{}';"
-            )
+        logger.error(
+            f"MISSING FIELDS in user_profiles: {e}. "
+            "Run migration_add_anamnesis_fields.sql in Supabase SQL Editor."
+        )
 
 
+@auth_required
 async def api_consultation_feedback(request: web.Request) -> web.Response:
-    """POST /api/consultation/feedback — сохраняет оценку консультации (good/bad)"""
+    """POST /api/consultation/feedback — оценка СВОЕЙ консультации (good/bad)"""
     try:
         body = await request.json()
     except Exception:
@@ -947,29 +1046,32 @@ async def api_consultation_feedback(request: web.Request) -> web.Response:
     if not consultation_id or rating not in ("good", "bad"):
         return json_response({"error": "consultation_id and rating (good|bad) required"}, status=400)
 
+    user_id = request["user_id"]
     try:
-        await run_query(
+        resp = await run_query(
             lambda: supabase_client.table("consultations")
             .update({"rating": rating})
             .eq("id", consultation_id)
+            .eq("user_id", user_id)
             .execute()
         )
-        logger.info(f"Feedback saved: consultation_id={consultation_id} rating={rating}")
+        if not resp.data:
+            return json_response({"error": "Consultation not found"}, status=404)
         return json_response({"status": "ok"})
     except Exception as e:
         logger.error(f"Feedback error: {e}", exc_info=True)
-        return json_response({"error": str(e)}, status=500)
+        return json_response({"error": "Internal server error"}, status=500)
 
 
-
+@auth_required
 async def api_consultations_get(request: web.Request) -> web.Response:
     """GET /api/consultations/{user_id} — история консультаций для Mini App."""
-    user_id = request.match_info.get('user_id')
+    user_id = request["user_id"]
     try:
         resp = await run_query(
             lambda: supabase_client.table('consultations')
             .select('id, symptoms, recommended_doctor, urgency_level, created_at')
-            .eq('user_id', int(user_id))
+            .eq('user_id', user_id)
             .order('created_at', desc=True)
             .limit(20)
             .execute()
@@ -1012,165 +1114,227 @@ async def api_consultations_get(request: web.Request) -> web.Response:
 
 
 
+# ── Вход и привязка аккаунтов ─────────────────────────────────────────────────
+
+async def _redeem_code_from_request(request: web.Request) -> tuple[dict | None, web.Response | None]:
+    """Общая часть входа и привязки по коду из бота: лимиты + погашение кода."""
+    if _is_rate_limited(request, "code", limit=10, window=60):
+        return None, _rate_limit_response()
+    try:
+        body = await request.json()
+    except Exception:
+        return None, json_response({"error": "invalid json"}, status=400)
+    entry = redeem_site_code(str(body.get("code", "")) if isinstance(body, dict) else "")
+    if not entry:
+        return None, json_response({"error": "invalid_code", "message": "Код неверный или истёк"}, status=400)
+    return entry, None
+
+
+def _session_payload(user_id: int, **user_fields) -> dict:
+    """Единый формат ответа при успешном входе: токен + данные пользователя."""
+    return {
+        "token": issue_token(user_id),
+        "id": user_id,
+        "auth_date": int(datetime.now(timezone.utc).timestamp()),
+        **user_fields,
+    }
+
+
+async def api_auth_telegram_webapp(request: web.Request) -> web.Response:
+    """
+    POST /api/auth/telegram-webapp {"init_data": Telegram.WebApp.initData}
+    Вход из Telegram Mini App. Подпись initData проверяется по BOT_TOKEN.
+    """
+    if _is_rate_limited(request, "auth", limit=20, window=60):
+        return _rate_limit_response()
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({"error": "invalid json"}, status=400)
+    user = verify_webapp_init_data(str(body.get("init_data", "")))
+    if not user:
+        return _unauthorized()
+    return json_response(_session_payload(
+        int(user["id"]),
+        first_name=user.get("first_name"),
+        last_name=user.get("last_name"),
+        username=user.get("username"),
+        photo_url=user.get("photo_url"),
+        provider="telegram",
+    ))
+
+
+async def api_auth_telegram_widget(request: web.Request) -> web.Response:
+    """
+    POST /api/auth/telegram-widget {id, first_name, ..., auth_date, hash}
+    Вход на сайте через Telegram Login Widget. Подпись проверяется по BOT_TOKEN.
+    """
+    if _is_rate_limited(request, "auth", limit=20, window=60):
+        return _rate_limit_response()
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({"error": "invalid json"}, status=400)
+    user = verify_login_widget(body if isinstance(body, dict) else {})
+    if not user:
+        return _unauthorized()
+    return json_response(_session_payload(
+        int(user["id"]),
+        first_name=user.get("first_name"),
+        last_name=user.get("last_name"),
+        username=user.get("username"),
+        photo_url=user.get("photo_url"),
+        provider="telegram",
+    ))
+
+
 async def api_auth_social(request: web.Request) -> web.Response:
-    """POST /api/auth/social — register or find user from OAuth / email provider"""
+    """
+    POST /api/auth/social {"access_token": <Supabase session.access_token>}
+    Вход через Google/email (Supabase Auth). Токен проверяется у Supabase —
+    email/ID из тела запроса больше НЕ принимаются на веру.
+    """
+    if _is_rate_limited(request, "auth", limit=20, window=60):
+        return _rate_limit_response()
     try:
         body = await request.json()
     except Exception:
         return json_response({"error": "invalid json"}, status=400)
 
-    provider    = str(body.get("provider", "email")).strip()
-    email       = str(body.get("email", "")).strip().lower()
-    name        = str(body.get("name", "")).strip()
-    provider_id = str(body.get("provider_id", "")).strip()
-    avatar      = body.get("avatar") or None
+    access_token = str(body.get("access_token", "")).strip()
+    if not access_token:
+        return json_response({"error": "access_token required"}, status=400)
 
-    if not email and not provider_id:
-        return json_response({"error": "email or provider_id required"}, status=400)
+    try:
+        auth_resp = await run_query(supabase_client.auth.get_user, access_token)
+        sb_user = auth_resp.user if auth_resp else None
+    except Exception as e:
+        logger.warning(f"Social auth: Supabase token rejected: {type(e).__name__}")
+        sb_user = None
+    if not sb_user:
+        return _unauthorized()
 
-    # Generate a stable integer user_id from provider_id or email
-    import hashlib
-    seed = provider_id if provider_id else email
-    h = int(hashlib.sha256(seed.encode()).hexdigest()[:12], 16)
-    # Use range 5_000_000_000 – 9_999_999_999 to avoid clash with Telegram IDs
-    user_id = 5_000_000_000 + (h % 4_999_999_999)
+    meta = sb_user.user_metadata or {}
+    email = (sb_user.email or "").lower()
+    name = str(meta.get("full_name") or meta.get("name") or email.split("@")[0]).strip()
+    avatar = meta.get("avatar_url") or meta.get("picture")
+    provider = (sb_user.app_metadata or {}).get("provider", "email")
+    user_id = derive_web_user_id(sb_user.id)
 
     first_name = name.split()[0] if name else email.split("@")[0]
-    last_name  = " ".join(name.split()[1:]) if name and len(name.split()) > 1 else None
+    last_name = " ".join(name.split()[1:]) or None
 
     try:
         existing = await run_query(
             lambda: supabase_client.table("user_profiles")
-                .select("user_id, full_name, phone")
-                .eq("user_id", user_id).limit(1).execute()
+                .select("user_id").eq("user_id", user_id).limit(1).execute()
         )
-
-        if not existing.data:
-            # Create new profile
+        is_new = not existing.data
+        if is_new:
             await run_query(
                 lambda: supabase_client.table("user_profiles").insert({
-                    "user_id":    user_id,
-                    "full_name":  name or first_name,
-                    "phone":      None,
-                    "gender":     None,
-                    "birthdate":  None,
+                    "user_id": user_id,
+                    "full_name": name or first_name,
                 }).execute()
             )
-            is_new = True
-            logger.info(f"Social auth: created user_id={user_id} via {provider} ({email})")
-        else:
-            is_new = False
-            logger.info(f"Social auth: found user_id={user_id} via {provider}")
-
-        return json_response({
-            "id":         user_id,
-            "first_name": first_name,
-            "last_name":  last_name,
-            "username":   None,
-            "photo_url":  avatar,
-            "provider":   provider,
-            "email":      email,
-            "is_new":     is_new,
-            "auth_date":  int(datetime.now(timezone.utc).timestamp()),
-        })
-
+            logger.info(f"Social auth: created user_id={user_id} via {provider}")
     except Exception as e:
         logger.error(f"Social auth error: {e}", exc_info=True)
-        return json_response({"error": str(e)}, status=500)
+        return json_response({"error": "Internal server error"}, status=500)
+
+    return json_response(_session_payload(
+        user_id,
+        first_name=first_name,
+        last_name=last_name,
+        username=None,
+        photo_url=avatar,
+        provider=provider,
+        email=email,
+        is_new=is_new,
+    ))
 
 
+async def api_auth_code(request: web.Request) -> web.Response:
+    """
+    POST /api/auth/code {"code": "K7RM-4QXA"} — вход на сайт по коду, который
+    бот прислал пользователю в его чат (/login). Код одноразовый, 5 минут.
+    """
+    entry, error = await _redeem_code_from_request(request)
+    if error is not None:
+        return error
+    logger.info(f"Site code login for telegram user {entry['telegram_id']}")
+    return json_response(_session_payload(
+        int(entry["telegram_id"]),
+        first_name=entry["first_name"],
+        last_name=entry["last_name"],
+        username=entry["username"],
+        photo_url=None,
+        provider="telegram",
+    ))
 
-async def api_auth_link_request(request: web.Request) -> web.Response:
-    """POST /api/auth/link-request — generate a link code for a web user"""
+
+_LINK_MERGE_FIELDS = [
+    "birthdate", "gender", "height", "weight", "phone",
+    "chronic_diseases", "drug_allergies", "smoking", "hereditary", "physical_activity",
+]
+
+
+@auth_required
+async def api_auth_link(request: web.Request) -> web.Response:
+    """
+    POST /api/auth/link {"code": "K7RM-4QXA"} — привязать Telegram к ТЕКУЩЕМУ
+    веб-аккаунту кодом из бота. Пустые поля веб-профиля заполняются из
+    Telegram-профиля того же человека (код получил владелец Telegram).
+    """
+    web_id = request["user_id"]
+    entry, error = await _redeem_code_from_request(request)
+    if error is not None:
+        return error
+    tg_id = int(entry["telegram_id"])
+    if tg_id == web_id:
+        return json_response({"error": "Этот аккаунт уже является Telegram-аккаунтом"}, status=400)
+
     try:
-        body = await request.json()
-    except Exception:
-        return json_response({"error": "invalid json"}, status=400)
+        tg_resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", tg_id).limit(1).execute())
+        web_resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", web_id).limit(1).execute())
+        tg_profile = tg_resp.data[0] if tg_resp.data else {}
+        web_profile = web_resp.data[0] if web_resp.data else {}
 
-    web_user_id = body.get("user_id")
-    if not web_user_id:
-        return json_response({"error": "user_id required"}, status=400)
+        update_web = {"linked_telegram_id": str(tg_id)}
+        for field in _LINK_MERGE_FIELDS + ["full_name"]:
+            if tg_profile.get(field) and not web_profile.get(field):
+                update_web[field] = tg_profile[field]
 
-    import random
-    import string
-    code = ''.join(random.choices(string.digits, k=6))
-    link_codes[code] = {
-        "web_user_id": int(web_user_id),
-        "verified":    False,
-        "telegram_id": None,
-        "created_at":  datetime.now(timezone.utc),
-    }
-    logger.info(f"Link code {code} created for web_user_id={web_user_id}")
-    return json_response({"code": code})
+        await run_query(lambda: supabase_client.table("user_profiles").upsert(
+            {"user_id": web_id, **update_web}, on_conflict="user_id").execute())
+        await run_query(lambda: supabase_client.table("user_profiles").upsert(
+            {"user_id": tg_id, "linked_web_id": str(web_id)}, on_conflict="user_id").execute())
+    except Exception as e:
+        logger.error(f"Account link error: {e}", exc_info=True)
+        return json_response({"error": "Internal server error"}, status=500)
 
-
-async def api_auth_link_status(request: web.Request) -> web.Response:
-    """GET /api/auth/link-status/{code} — poll for link completion"""
-    code = request.match_info.get("code", "")
-    entry = link_codes.get(code)
-    if not entry:
-        return json_response({"verified": False, "error": "not_found"})
-    return json_response({
-        "verified":    entry.get("verified", False),
-        "telegram_id": entry.get("telegram_id"),
-    })
-
-
-async def api_auth_request(request: web.Request) -> web.Response:
-    """POST /api/auth/request — регистрирует 6-значный код для web-авторизации"""
+    logger.info(f"Accounts linked: tg={tg_id} <-> web={web_id}")
     try:
-        body = await request.json()
-    except Exception:
-        return json_response({"error": "invalid json"}, status=400)
-
-    code = str(body.get("code", "")).strip()
-    if not code or not code.isdigit() or len(code) != 6:
-        return json_response({"error": "Invalid code"}, status=400)
-
-    # Удаляем старые коды этого же источника (по IP) — не обязательно, просто чистота
-    web_auth_codes[code] = {
-        "telegram_id": None,
-        "first_name": None,
-        "last_name": None,
-        "username": None,
-        "photo_url": None,
-        "verified": False,
-        "created_at": datetime.now(timezone.utc),
-    }
-    logger.info(f"Web auth code registered: {code}")
-    return json_response({"ok": True, "expires_in": 600})
+        await bot.send_message(tg_id, "✅ Ваш Telegram привязан к аккаунту на сайте Symed.")
+    except Exception as e:
+        logger.warning(f"Link notification failed for {tg_id}: {e}")
+    return json_response({"linked": True, "telegram_id": tg_id})
 
 
-async def api_auth_status(request: web.Request) -> web.Response:
-    """GET /api/auth/status/{code} — проверяет статус верификации кода"""
-    code = request.match_info.get("code", "")
-    entry = web_auth_codes.get(code)
+@auth_required
+async def api_auth_me(request: web.Request) -> web.Response:
+    """GET /api/auth/me — проверка токена; возвращает user_id владельца."""
+    return json_response({"id": request["user_id"]})
 
-    if not entry:
-        return json_response({"verified": False, "error": "Code not found or expired"}, status=404)
 
-    # Проверяем expiry (10 минут)
-    age = (datetime.now(timezone.utc) - entry["created_at"]).total_seconds()
-    if age > 600:
-        web_auth_codes.pop(code, None)
-        return json_response({"verified": False, "error": "Code expired"}, status=404)
-
-    if not entry["verified"]:
-        return json_response({"verified": False})
-
-    # Верифицирован — возвращаем данные и удаляем код
-    user_data = {
-        "verified": True,
-        "id": entry["telegram_id"],
-        "first_name": entry["first_name"],
-        "last_name": entry["last_name"],
-        "username": entry["username"],
-        "photo_url": entry["photo_url"],
-        "auth_date": int(datetime.now(timezone.utc).timestamp()),
-    }
-    web_auth_codes.pop(code, None)
-    logger.info(f"Web auth code {code} consumed for user {entry['telegram_id']}")
-    return json_response(user_data)
+@auth_required
+async def api_auth_metrics_token(request: web.Request) -> web.Response:
+    """
+    GET /api/auth/metrics-token — токен ТОЛЬКО для отправки показателей
+    (iPhone Shortcut / Apple Watch), действует 180 дней. Им нельзя читать данные.
+    """
+    token = issue_token(request["user_id"], scope=SCOPE_METRICS, ttl=180 * 24 * 3600)
+    return json_response({"token": token, "expires_in": 180 * 24 * 3600})
 
 
 async def cleanup_stale_sessions():
@@ -1185,6 +1349,9 @@ async def cleanup_stale_sessions():
                 stale.append(sid)
         for sid in stale:
             consultation_sessions.pop(sid, None)
+        for code, entry in list(site_codes.items()):
+            if _time.time() - entry["created_at"] > 300:
+                site_codes.pop(code, None)
         if stale:
             logger.info(f"Cleaned up {len(stale)} stale consultation sessions")
 
@@ -1267,10 +1434,12 @@ async def start_web_server():
         app.router.add_post('/api/health/metrics/report/{user_id}', api_health_metrics_report)
         app.router.add_get('/api/health/metrics/{user_id}', api_health_metrics_get)
         app.router.add_post('/api/auth/social', api_auth_social)
-        app.router.add_post('/api/auth/request', api_auth_request)
-        app.router.add_get('/api/auth/status/{code}', api_auth_status)
-        app.router.add_post('/api/auth/link-request', api_auth_link_request)
-        app.router.add_get('/api/auth/link-status/{code}', api_auth_link_status)
+        app.router.add_post('/api/auth/telegram-webapp', api_auth_telegram_webapp)
+        app.router.add_post('/api/auth/telegram-widget', api_auth_telegram_widget)
+        app.router.add_get('/api/auth/me', api_auth_me)
+        app.router.add_get('/api/auth/metrics-token', api_auth_metrics_token)
+        app.router.add_post('/api/auth/code', api_auth_code)
+        app.router.add_post('/api/auth/link', api_auth_link)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -1295,18 +1464,17 @@ async def start_web_server():
 
 
 
+@auth_required
 async def api_medications_post(request: web.Request) -> web.Response:
     """POST /api/medications/{user_id} — добавить лекарство"""
-    user_id = request.match_info.get('user_id')
-    if not user_id:
-        return json_response({'error': 'user_id required'}, status=400)
+    user_id = request["user_id"]
     try:
         body = await request.json()
     except Exception:
         return json_response({'error': 'invalid JSON'}, status=400)
     try:
         row = {
-            'user_id': int(user_id),
+            'user_id': user_id,
             'medication_name': body.get('name') or body.get('medication_name', ''),
             'dosage': body.get('dosage', ''),
             'frequency': body.get('frequency', ''),
@@ -1323,14 +1491,13 @@ async def api_medications_post(request: web.Request) -> web.Response:
         return json_response({'ok': True, 'id': inserted.get('id')})
     except Exception as e:
         logger.error(f'Medications POST error for {user_id}: {e}', exc_info=True)
-        return json_response({'error': str(e)}, status=500)
+        return json_response({'error': 'Internal server error'}, status=500)
 
 
+@auth_required
 async def api_diary_post(request: web.Request) -> web.Response:
     """POST /api/diary/{user_id} — добавить запись дневника"""
-    user_id = request.match_info.get('user_id')
-    if not user_id:
-        return json_response({'error': 'user_id required'}, status=400)
+    user_id = request["user_id"]
     try:
         body = await request.json()
     except Exception:
@@ -1340,7 +1507,7 @@ async def api_diary_post(request: web.Request) -> web.Response:
         today = date.today().isoformat()
         now_time = datetime.now().strftime('%H:%M:%S')
         row = {
-            'user_id': int(user_id),
+            'user_id': user_id,
             'entry_date': body.get('entry_date', today),
             'entry_time': body.get('entry_time', now_time),
         }
@@ -1357,19 +1524,18 @@ async def api_diary_post(request: web.Request) -> web.Response:
         return json_response({'ok': True, 'id': inserted.get('id')})
     except Exception as e:
         logger.error(f'Diary POST error for {user_id}: {e}', exc_info=True)
-        return json_response({'error': str(e)}, status=500)
+        return json_response({'error': 'Internal server error'}, status=500)
 
 
+@auth_required
 async def api_medications_get(request: web.Request) -> web.Response:
     """GET /api/medications/{user_id} — список активных лекарств пользователя"""
-    user_id = request.match_info.get('user_id')
-    if not user_id:
-        return json_response({'error': 'user_id required'}, status=400)
+    user_id = request["user_id"]
     try:
         resp = await run_query(
             lambda: supabase_client.table('medications')
             .select('id, medication_name, dosage, frequency, times, start_date, end_date, notes')
-            .eq('user_id', int(user_id))
+            .eq('user_id', user_id)
             .eq('is_active', True)
             .order('created_at', desc=True)
             .execute()
@@ -1380,16 +1546,15 @@ async def api_medications_get(request: web.Request) -> web.Response:
         return json_response({'records': [], 'has_data': False})
 
 
+@auth_required
 async def api_diary_get(request: web.Request) -> web.Response:
     """GET /api/diary/{user_id} — записи дневника здоровья"""
-    user_id = request.match_info.get('user_id')
-    if not user_id:
-        return json_response({'error': 'user_id required'}, status=400)
+    user_id = request["user_id"]
     try:
         resp = await run_query(
             lambda: supabase_client.table('health_diary')
             .select('id, entry_date, entry_time, created_at, temperature, blood_pressure_sys, blood_pressure_dia, pulse, weight, mood, symptoms, notes')
-            .eq('user_id', int(user_id))
+            .eq('user_id', user_id)
             .order('entry_date', desc=True)
             .order('entry_time', desc=True)
             .limit(30)

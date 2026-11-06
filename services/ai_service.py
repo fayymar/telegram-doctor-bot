@@ -83,6 +83,7 @@ class AIService:
             response = self.client.messages.create(
                 model=self.model_name,
                 max_tokens=max_tokens,
+                temperature=temperature,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
             )
