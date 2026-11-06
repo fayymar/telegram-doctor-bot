@@ -66,9 +66,14 @@ async def cmd_start(message: Message, state: FSMContext):
 
     if payload.startswith("auth_"):
         code = payload[5:]
+        from bot.shared import TOO_MANY_ATTEMPTS_TEXT, code_attempts_blocked, record_failed_code_attempt
+        if code_attempts_blocked(message.from_user.id):
+            await message.answer(TOO_MANY_ATTEMPTS_TEXT)
+            return
         entry = web_auth_codes.get(code)
 
         if not entry:
+            record_failed_code_attempt(message.from_user.id)
             await message.answer(
                 "❌ Код не найден или уже истёк.\n\n"
                 "Вернитесь на сайт и получите новый код.",
@@ -115,8 +120,13 @@ async def cmd_start(message: Message, state: FSMContext):
         from bot.shared import link_codes
         from database.connection import supabase_client as _sb
 
+        from bot.shared import TOO_MANY_ATTEMPTS_TEXT, code_attempts_blocked, record_failed_code_attempt
+        if code_attempts_blocked(message.from_user.id):
+            await message.answer(TOO_MANY_ATTEMPTS_TEXT)
+            return
         entry = link_codes.get(code)
         if not entry:
+            record_failed_code_attempt(message.from_user.id)
             await message.answer("❌ Код привязки не найден или истёк.\n\nОткройте Symed → Профиль → Подключить Telegram.")
             return
 
@@ -410,8 +420,13 @@ async def handle_web_auth_code(message: Message):
     """Обработчик ручного ввода 6-значных кодов."""
     from bot.shared import web_auth_codes
     code = message.text.strip()
+    from bot.shared import TOO_MANY_ATTEMPTS_TEXT, code_attempts_blocked, record_failed_code_attempt
+    if code_attempts_blocked(message.from_user.id):
+        await message.answer(TOO_MANY_ATTEMPTS_TEXT)
+        return
     entry = web_auth_codes.get(code)
     if not entry:
+        record_failed_code_attempt(message.from_user.id)
         await message.answer("❌ Код не найден или уже истёк.\n\nОткройте symed-web.vercel.app и получите новый код.")
         return
     from datetime import datetime as _dt
@@ -453,9 +468,14 @@ async def cmd_link(message: Message) -> None:
         return
 
     code = parts[1].strip()
+    from bot.shared import TOO_MANY_ATTEMPTS_TEXT, code_attempts_blocked, record_failed_code_attempt
+    if code_attempts_blocked(message.from_user.id):
+        await message.answer(TOO_MANY_ATTEMPTS_TEXT)
+        return
     entry = link_codes.get(code)
 
     if not entry:
+        record_failed_code_attempt(message.from_user.id)
         await message.answer("❌ Код не найден или истёк.\n\nОткройте Symed → Профиль → Подключить Telegram.")
         return
 

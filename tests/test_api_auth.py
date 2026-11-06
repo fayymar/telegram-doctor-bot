@@ -123,3 +123,12 @@ def test_consultation_session_owned_by_user():
         )
         assert r.status == 200
     run(t)
+
+
+def test_client_ip_prefers_cloudflare_header():
+    from aiohttp.test_utils import make_mocked_request
+    req = make_mocked_request("GET", "/", headers={
+        "CF-Connecting-IP": "1.2.3.4", "X-Forwarded-For": "6.6.6.6, 10.0.0.1"})
+    assert main._client_ip(req) == "1.2.3.4"
+    req = make_mocked_request("GET", "/", headers={"X-Forwarded-For": "6.6.6.6, 9.9.9.9"})
+    assert main._client_ip(req) == "9.9.9.9"

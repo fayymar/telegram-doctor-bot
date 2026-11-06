@@ -104,10 +104,15 @@ _rate_counters: dict = defaultdict(list)  # (bucket, ip) → [timestamps]
 
 def _client_ip(request: web.Request) -> str:
     """
-    IP клиента. Render ставит прокси перед приложением и ДОПИСЫВАЕТ реальный IP
-    в конец X-Forwarded-For, поэтому берём последнее значение: первое клиент
-    может подставить любым и так обходить rate limit.
+    IP клиента. На Render перед приложением стоит Cloudflare: он сам выставляет
+    CF-Connecting-IP / True-Client-IP (значение от клиента перезаписывается),
+    поэтому они надёжнее. X-Forwarded-For клиент может дописать сам, поэтому из
+    него берём только последнее значение — его добавил прокси.
     """
+    for header in ("CF-Connecting-IP", "True-Client-IP"):
+        value = request.headers.get(header, "").strip()
+        if value:
+            return value
     xff = request.headers.get("X-Forwarded-For", "")
     if xff:
         return xff.split(",")[-1].strip()
@@ -1347,10 +1352,11 @@ async def api_auth_me(request: web.Request) -> web.Response:
 @auth_required
 async def api_auth_metrics_token(request: web.Request) -> web.Response:
     """
-    GET /api/auth/metrics-token — бессрочный токен ТОЛЬКО для отправки показателей
-    (iPhone Shortcut / Apple Watch). Им нельзя читать данные пользователя.
+    GET /api/auth/metrics-token — токен ТОЛЬКО для отправки показателей
+    (iPhone Shortcut / Apple Watch), действует 180 дней. Им нельзя читать данные.
     """
-    return json_response({"token": issue_token(request["user_id"], scope=SCOPE_METRICS, ttl=None)})
+    token = issue_token(request["user_id"], scope=SCOPE_METRICS, ttl=180 * 24 * 3600)
+    return json_response({"token": token, "expires_in": 180 * 24 * 3600})
 
 
 async def cleanup_stale_sessions():
