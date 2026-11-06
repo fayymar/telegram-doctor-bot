@@ -1,8 +1,8 @@
 import asyncio
 import functools
+import ipaddress
 import json
 import logging
-import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -97,25 +97,25 @@ import time as _time
 # ── Rate limiting (in-memory, resets on redeploy) ──────────────────────────
 from collections import defaultdict
 
-from bot.shared import link_codes, web_auth_codes
+from bot.shared import redeem_site_code, site_codes
 
 _rate_counters: dict = defaultdict(list)  # (bucket, ip) → [timestamps]
 
 
 def _client_ip(request: web.Request) -> str:
     """
-    IP клиента. На Render перед приложением стоит Cloudflare: он сам выставляет
-    CF-Connecting-IP / True-Client-IP (значение от клиента перезаписывается),
-    поэтому они надёжнее. X-Forwarded-For клиент может дописать сам, поэтому из
-    него берём только последнее значение — его добавил прокси.
+    IP клиента для rate limit. На Render перед приложением стоит Cloudflare:
+    он сам выставляет CF-Connecting-IP / True-Client-IP, перезаписывая то, что
+    прислал клиент. X-Forwarded-For не используем: клиент может дописать туда
+    что угодно, а последнее значение — это адрес прокси, общий для всех.
     """
     for header in ("CF-Connecting-IP", "True-Client-IP"):
         value = request.headers.get(header, "").strip()
         if value:
-            return value
-    xff = request.headers.get("X-Forwarded-For", "")
-    if xff:
-        return xff.split(",")[-1].strip()
+            try:
+                return str(ipaddress.ip_address(value))
+            except ValueError:
+                continue
     return request.remote or "unknown"
 
 
@@ -1105,28 +1105,31 @@ async def api_consultations_get(request: web.Request) -> web.Response:
 
 # ── Вход и привязка аккаунтов ─────────────────────────────────────────────────
 
-_CODE_TTL = 600            # коды входа/привязки живут 10 минут
-_MAX_PENDING_CODES = 5000  # защита памяти от спама запросами кодов
+# Защита от перебора 8-значных кодов из бота: лимит на IP + общий лимит неудач
+_CODE_FAIL_WINDOW = 600
+_CODE_GLOBAL_FAIL_LIMIT = 1000
+_code_failures: list = []
 
 
-def _purge_expired(store: dict) -> None:
-    now = datetime.now(timezone.utc)
-    for code, entry in list(store.items()):
-        if (now - entry["created_at"]).total_seconds() > _CODE_TTL:
-            store.pop(code, None)
+def _code_guessing_blocked() -> bool:
+    now = _time.time()
+    _code_failures[:] = [t for t in _code_failures if now - t < _CODE_FAIL_WINDOW]
+    return len(_code_failures) >= _CODE_GLOBAL_FAIL_LIMIT
 
 
-def _new_code(store: dict) -> str | None:
-    """Криптографически случайный 6-значный код, которого ещё нет в store."""
-    if len(store) >= _MAX_PENDING_CODES:
-        _purge_expired(store)
-        if len(store) >= _MAX_PENDING_CODES:
-            return None
-    for _ in range(20):
-        code = f"{secrets.randbelow(1_000_000):06d}"
-        if code not in store:
-            return code
-    return None
+async def _redeem_code_from_request(request: web.Request) -> tuple[dict | None, web.Response | None]:
+    """Общая часть входа и привязки по коду из бота: лимиты + погашение кода."""
+    if _is_rate_limited(request, "code", limit=10, window=60) or _code_guessing_blocked():
+        return None, _rate_limit_response()
+    try:
+        body = await request.json()
+    except Exception:
+        return None, json_response({"error": "invalid json"}, status=400)
+    entry = redeem_site_code(str(body.get("code", "")) if isinstance(body, dict) else "")
+    if not entry:
+        _code_failures.append(_time.time())
+        return None, json_response({"error": "invalid_code", "message": "Код неверный или истёк"}, status=400)
+    return entry, None
 
 
 def _session_payload(user_id: int, **user_fields) -> dict:
@@ -1253,94 +1256,71 @@ async def api_auth_social(request: web.Request) -> web.Response:
     ))
 
 
+async def api_auth_code(request: web.Request) -> web.Response:
+    """
+    POST /api/auth/code {"code": "12345678"} — вход на сайт по коду, который
+    бот прислал пользователю в его чат (/login). Код одноразовый, 5 минут.
+    """
+    entry, error = await _redeem_code_from_request(request)
+    if error is not None:
+        return error
+    logger.info(f"Site code login for telegram user {entry['telegram_id']}")
+    return json_response(_session_payload(
+        int(entry["telegram_id"]),
+        first_name=entry["first_name"],
+        last_name=entry["last_name"],
+        username=entry["username"],
+        photo_url=None,
+        provider="telegram",
+    ))
+
+
+_LINK_MERGE_FIELDS = [
+    "birthdate", "gender", "height", "weight", "phone",
+    "chronic_diseases", "drug_allergies", "smoking", "hereditary", "physical_activity",
+]
+
+
 @auth_required
-async def api_auth_link_request(request: web.Request) -> web.Response:
+async def api_auth_link(request: web.Request) -> web.Response:
     """
-    POST /api/auth/link-request — код для привязки Telegram к ТЕКУЩЕМУ веб-аккаунту.
-    web_user_id берётся из токена, а не из тела запроса.
+    POST /api/auth/link {"code": "12345678"} — привязать Telegram к ТЕКУЩЕМУ
+    веб-аккаунту кодом из бота. Пустые поля веб-профиля заполняются из
+    Telegram-профиля того же человека (код получил владелец Telegram).
     """
-    code = _new_code(link_codes)
-    if not code:
-        return json_response({"error": "Try again later"}, status=503)
-    link_codes[code] = {
-        "web_user_id": request["user_id"],
-        "verified": False,
-        "telegram_id": None,
-        "created_at": datetime.now(timezone.utc),
-    }
-    logger.info(f"Link code created for web_user_id={request['user_id']}")
-    return json_response({"code": code, "expires_in": _CODE_TTL})
+    web_id = request["user_id"]
+    entry, error = await _redeem_code_from_request(request)
+    if error is not None:
+        return error
+    tg_id = int(entry["telegram_id"])
+    if tg_id == web_id:
+        return json_response({"error": "Этот аккаунт уже является Telegram-аккаунтом"}, status=400)
 
+    try:
+        tg_resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", tg_id).limit(1).execute())
+        web_resp = await run_query(lambda: supabase_client.table("user_profiles").select("*").eq("user_id", web_id).limit(1).execute())
+        tg_profile = tg_resp.data[0] if tg_resp.data else {}
+        web_profile = web_resp.data[0] if web_resp.data else {}
 
-@auth_required
-async def api_auth_link_status(request: web.Request) -> web.Response:
-    """GET /api/auth/link-status/{code} — статус привязки (только для владельца кода)"""
-    code = request.match_info.get("code", "")
-    entry = link_codes.get(code)
-    if not entry or entry.get("web_user_id") != request["user_id"]:
-        return json_response({"verified": False, "error": "not_found"})
-    return json_response({
-        "verified": entry.get("verified", False),
-        "telegram_id": entry.get("telegram_id"),
-    })
+        update_web = {"linked_telegram_id": str(tg_id)}
+        for field in _LINK_MERGE_FIELDS + ["full_name"]:
+            if tg_profile.get(field) and not web_profile.get(field):
+                update_web[field] = tg_profile[field]
 
+        await run_query(lambda: supabase_client.table("user_profiles").upsert(
+            {"user_id": web_id, **update_web}, on_conflict="user_id").execute())
+        await run_query(lambda: supabase_client.table("user_profiles").upsert(
+            {"user_id": tg_id, "linked_web_id": str(web_id)}, on_conflict="user_id").execute())
+    except Exception as e:
+        logger.error(f"Account link error: {e}", exc_info=True)
+        return json_response({"error": "Internal server error"}, status=500)
 
-async def api_auth_request(request: web.Request) -> web.Response:
-    """
-    POST /api/auth/request — сервер создаёт 6-значный код входа через бота.
-    Возвращает code (его пользователь отправляет боту) и poll_secret
-    (секрет, без которого нельзя узнать результат входа по этому коду).
-    """
-    if _is_rate_limited(request, "auth", limit=20, window=60):
-        return _rate_limit_response()
-    code = _new_code(web_auth_codes)
-    if not code:
-        return json_response({"error": "Try again later"}, status=503)
-    poll_secret = secrets.token_urlsafe(24)
-    web_auth_codes[code] = {
-        "poll_secret": poll_secret,
-        "telegram_id": None,
-        "first_name": None,
-        "last_name": None,
-        "username": None,
-        "photo_url": None,
-        "verified": False,
-        "created_at": datetime.now(timezone.utc),
-    }
-    return json_response({"code": code, "poll_secret": poll_secret, "expires_in": _CODE_TTL})
-
-
-async def api_auth_status(request: web.Request) -> web.Response:
-    """GET /api/auth/status/{code}?secret=<poll_secret> — проверяет, подтвердил ли бот код"""
-    code = request.match_info.get("code", "")
-    secret = request.rel_url.query.get("secret", "")
-    entry = web_auth_codes.get(code)
-
-    if not entry or not secret or not secrets.compare_digest(secret, entry.get("poll_secret", "")):
-        return json_response({"verified": False, "error": "Code not found or expired"}, status=404)
-
-    age = (datetime.now(timezone.utc) - entry["created_at"]).total_seconds()
-    if age > _CODE_TTL:
-        web_auth_codes.pop(code, None)
-        return json_response({"verified": False, "error": "Code expired"}, status=404)
-
-    if not entry["verified"]:
-        return json_response({"verified": False})
-
-    # Верифицирован — выдаём токен и удаляем код (одноразовый)
-    web_auth_codes.pop(code, None)
-    logger.info(f"Web auth code consumed for user {entry['telegram_id']}")
-    return json_response({
-        "verified": True,
-        **_session_payload(
-            int(entry["telegram_id"]),
-            first_name=entry["first_name"],
-            last_name=entry["last_name"],
-            username=entry["username"],
-            photo_url=entry["photo_url"],
-            provider="telegram",
-        ),
-    })
+    logger.info(f"Accounts linked: tg={tg_id} <-> web={web_id}")
+    try:
+        await bot.send_message(tg_id, "✅ Ваш Telegram привязан к аккаунту на сайте Symed.")
+    except Exception as e:
+        logger.warning(f"Link notification failed for {tg_id}: {e}")
+    return json_response({"linked": True, "telegram_id": tg_id})
 
 
 @auth_required
@@ -1371,8 +1351,9 @@ async def cleanup_stale_sessions():
                 stale.append(sid)
         for sid in stale:
             consultation_sessions.pop(sid, None)
-        _purge_expired(web_auth_codes)
-        _purge_expired(link_codes)
+        for code, entry in list(site_codes.items()):
+            if _time.time() - entry["created_at"] > 300:
+                site_codes.pop(code, None)
         if stale:
             logger.info(f"Cleaned up {len(stale)} stale consultation sessions")
 
@@ -1459,10 +1440,8 @@ async def start_web_server():
         app.router.add_post('/api/auth/telegram-widget', api_auth_telegram_widget)
         app.router.add_get('/api/auth/me', api_auth_me)
         app.router.add_get('/api/auth/metrics-token', api_auth_metrics_token)
-        app.router.add_post('/api/auth/request', api_auth_request)
-        app.router.add_get('/api/auth/status/{code}', api_auth_status)
-        app.router.add_post('/api/auth/link-request', api_auth_link_request)
-        app.router.add_get('/api/auth/link-status/{code}', api_auth_link_status)
+        app.router.add_post('/api/auth/code', api_auth_code)
+        app.router.add_post('/api/auth/link', api_auth_link)
 
         runner = web.AppRunner(app)
         await runner.setup()

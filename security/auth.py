@@ -36,6 +36,8 @@ _SECRET = (
 SESSION_TTL = 30 * 24 * 3600  # 30 дней
 TELEGRAM_AUTH_MAX_AGE = 24 * 3600  # подпись Telegram старше суток не принимаем
 
+WEB_USER_ID_MIN = 100_000_000_000  # ID веб-аккаунтов начинаются здесь (см. derive_web_user_id)
+
 SCOPE_SESSION = "session"  # полный доступ к данным пользователя
 SCOPE_METRICS = "metrics"  # только отправка показателей (iPhone Shortcut / часы)
 
@@ -145,11 +147,14 @@ def verify_login_widget(data: dict, max_age: int = TELEGRAM_AUTH_MAX_AGE) -> dic
 def derive_web_user_id(supabase_uid: str) -> int:
     """
     Стабильный числовой user_id для веб-пользователя из UUID Supabase Auth.
-    Диапазон 5_000_000_000–9_999_999_999, чтобы не пересекаться с Telegram ID.
-    ДОЛЖЕН совпадать с deriveUserId() во фронтенде symed-web (src/lib/auth.ts).
+
+    Диапазон 100_000_000_000 – 9_100_000_000_000. Telegram выдаёт ID по порядку и
+    уже перешёл 8e9, поэтому старый диапазон 5e9–1e10 пересекался с реальными
+    Telegram-аккаунтами. Верхняя граница < 2^53, чтобы ID без потерь помещался
+    в number в JavaScript. Фронтенд берёт id из ответа сервера и сам его не считает.
     """
-    h = int(hashlib.sha256(supabase_uid.encode()).hexdigest()[:12], 16)
-    return 5_000_000_000 + (h % 4_999_999_999)
+    h = int(hashlib.sha256(supabase_uid.encode()).hexdigest()[:16], 16)
+    return WEB_USER_ID_MIN + (h % 9_000_000_000_000)
 
 
 def bearer_token(headers) -> str | None:

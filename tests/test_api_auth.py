@@ -14,9 +14,8 @@ def _app():
     app = web.Application(middlewares=[main.cors_middleware])
     app.router.add_get("/api/profile/{user_id}", main.api_profile_get)
     app.router.add_post("/api/health/metrics", main.api_health_metrics_post)
-    app.router.add_post("/api/auth/request", main.api_auth_request)
-    app.router.add_get("/api/auth/status/{code}", main.api_auth_status)
-    app.router.add_post("/api/auth/link-request", main.api_auth_link_request)
+    app.router.add_post("/api/auth/code", main.api_auth_code)
+    app.router.add_post("/api/auth/link", main.api_auth_link)
     app.router.add_post("/api/consultation/answer", main.api_consultation_answer)
     return app
 
@@ -83,30 +82,62 @@ def test_metrics_post_requires_token_and_ignores_body_user_id(monkeypatch):
     run(t)
 
 
-def test_auth_code_status_needs_poll_secret():
-    async def t(c):
-        r = await c.post("/api/auth/request")
-        body = await r.json()
-        code, secret = body["code"], body["poll_secret"]
-        main.web_auth_codes[code].update(verified=True, telegram_id=321, first_name="X")
+def _tg_user(uid=321):
+    return SimpleNamespace(id=uid, first_name="X", last_name=None, username="x")
 
-        r = await c.get(f"/api/auth/status/{code}")
-        assert r.status == 404
-        r = await c.get(f"/api/auth/status/{code}?secret=wrong")
-        assert r.status == 404
-        r = await c.get(f"/api/auth/status/{code}?secret={secret}")
+
+def test_site_code_login_is_one_time():
+    from bot.shared import issue_site_code
+    code = issue_site_code(_tg_user())
+
+    async def t(c):
+        r = await c.post("/api/auth/code", json={"code": "00000000" if code != "00000000" else "11111111"})
+        assert r.status == 400
+        r = await c.post("/api/auth/code", json={"code": code})
         data = await r.json()
-        assert data["verified"] is True and data["id"] == 321 and data["token"]
+        assert r.status == 200 and data["id"] == 321 and data["token"]
+        r = await c.post("/api/auth/code", json={"code": code})
+        assert r.status == 400  # повторно не работает
     run(t)
 
 
-def test_link_request_uses_token_user():
+def test_new_code_invalidates_previous_one_for_same_user():
+    from bot.shared import issue_site_code, site_codes
+    first = issue_site_code(_tg_user(555))
+    second = issue_site_code(_tg_user(555))
+    assert first not in site_codes and second in site_codes
+
+
+def test_code_endpoint_rate_limited():
     async def t(c):
-        r = await c.post("/api/auth/link-request", json={"user_id": 1})
+        statuses = [(await c.post("/api/auth/code", json={"code": "12345678"})).status for _ in range(12)]
+        assert 429 in statuses
+    run(t)
+
+
+def test_link_requires_session_and_uses_token_user(monkeypatch):
+    from bot.shared import issue_site_code
+    writes = []
+
+    async def fake_run_query(func, *a, **kw):
+        writes.append(func)
+        return SimpleNamespace(data=[])
+    monkeypatch.setattr(main, "run_query", fake_run_query)
+
+    async def fake_send(*a, **kw):
+        return None
+    monkeypatch.setattr(main.bot, "send_message", fake_send)
+
+    code = issue_site_code(_tg_user(777))
+
+    async def t(c):
+        r = await c.post("/api/auth/link", json={"code": code})
         assert r.status == 401
-        r = await c.post("/api/auth/link-request", headers={"Authorization": f"Bearer {issue_token(5_000_000_123)}"})
-        code = (await r.json())["code"]
-        assert main.link_codes[code]["web_user_id"] == 5_000_000_123
+        web_id = 100_000_000_123
+        r = await c.post("/api/auth/link", json={"code": code},
+                         headers={"Authorization": f"Bearer {issue_token(web_id)}"})
+        data = await r.json()
+        assert r.status == 200 and data["telegram_id"] == 777
     run(t)
 
 
@@ -130,5 +161,8 @@ def test_client_ip_prefers_cloudflare_header():
     req = make_mocked_request("GET", "/", headers={
         "CF-Connecting-IP": "1.2.3.4", "X-Forwarded-For": "6.6.6.6, 10.0.0.1"})
     assert main._client_ip(req) == "1.2.3.4"
+    # X-Forwarded-For клиент может подделать — не используем его
     req = make_mocked_request("GET", "/", headers={"X-Forwarded-For": "6.6.6.6, 9.9.9.9"})
-    assert main._client_ip(req) == "9.9.9.9"
+    assert main._client_ip(req) not in ("6.6.6.6", "9.9.9.9")
+    req = make_mocked_request("GET", "/", headers={"CF-Connecting-IP": "not-an-ip"})
+    assert main._client_ip(req) != "not-an-ip"

@@ -1,38 +1,69 @@
-"""Shared in-memory state между main.py и bot handlers."""
+"""
+Shared in-memory state между main.py и bot handlers.
 
-# web_auth_codes: code -> {telegram_id, first_name, last_name, username, photo_url, verified, created_at}
-web_auth_codes: dict = {}
+Вход на сайт и привязка аккаунтов работают по коду, который ВЫДАЁТ БОТ
+пользователю в его собственный чат, а пользователь вводит его на сайте.
+Так код всегда принадлежит тому Telegram-аккаунту, который его получил:
+чужая ссылка на бота не может ни залогинить злоумышленника под жертвой,
+ни скопировать профиль жертвы в чужой аккаунт.
+"""
+import secrets
+import time
 
-# link_codes: code -> {web_user_id, verified, telegram_id, created_at}
-link_codes: dict = {}
+SITE_CODE_TTL = 300     # код действует 5 минут
+SITE_CODE_DIGITS = 8    # 10^8 вариантов: перебор ограничен rate limit на сервере
 
-# ── Защита от перебора кодов ──────────────────────────────────────────────────
-# Коды входа и привязки — 6 цифр. Без ограничения их можно перебирать, отправляя
-# боту /link 000000…999999, и привязать свой Telegram к чужому веб-профилю.
-import time as _time
-
-_CODE_FAIL_LIMIT = 5         # неверных кодов
-_CODE_FAIL_WINDOW = 15 * 60  # за 15 минут с одного Telegram-аккаунта
-_code_failures: dict = {}    # telegram_id -> [timestamps]
-
-
-def code_attempts_blocked(telegram_id: int) -> bool:
-    """True, если пользователь исчерпал лимит неверных кодов."""
-    now = _time.time()
-    recent = [t for t in _code_failures.get(telegram_id, []) if now - t < _CODE_FAIL_WINDOW]
-    if recent:
-        _code_failures[telegram_id] = recent
-    else:
-        _code_failures.pop(telegram_id, None)
-    return len(recent) >= _CODE_FAIL_LIMIT
+# code -> {telegram_id, first_name, last_name, username, created_at}
+site_codes: dict = {}
 
 
-def record_failed_code_attempt(telegram_id: int) -> None:
-    _code_failures.setdefault(telegram_id, []).append(_time.time())
-    if len(_code_failures) > 50_000:  # не даём словарю расти бесконечно
-        now = _time.time()
-        for k in [k for k, v in _code_failures.items() if not v or now - v[-1] > _CODE_FAIL_WINDOW]:
-            del _code_failures[k]
+def _purge_expired_site_codes() -> None:
+    now = time.time()
+    for code, entry in list(site_codes.items()):
+        if now - entry["created_at"] > SITE_CODE_TTL:
+            site_codes.pop(code, None)
 
 
-TOO_MANY_ATTEMPTS_TEXT = "⏳ Слишком много неверных кодов. Попробуйте снова через 15 минут."
+def issue_site_code(telegram_user) -> str:
+    """
+    Создаёт одноразовый код для входа/привязки на сайте для данного
+    Telegram-пользователя. Предыдущий код этого пользователя аннулируется.
+    """
+    _purge_expired_site_codes()
+    for code, entry in list(site_codes.items()):
+        if entry["telegram_id"] == telegram_user.id:
+            site_codes.pop(code, None)
+    while True:
+        code = f"{secrets.randbelow(10 ** SITE_CODE_DIGITS):0{SITE_CODE_DIGITS}d}"
+        if code not in site_codes:
+            break
+    site_codes[code] = {
+        "telegram_id": telegram_user.id,
+        "first_name": telegram_user.first_name or "",
+        "last_name": telegram_user.last_name or "",
+        "username": telegram_user.username or "",
+        "created_at": time.time(),
+    }
+    return code
+
+
+def redeem_site_code(code: str) -> dict | None:
+    """Погашает код (одноразово). Возвращает данные Telegram-пользователя или None."""
+    code = (code or "").strip().replace(" ", "")
+    entry = site_codes.pop(code, None)
+    if not entry or time.time() - entry["created_at"] > SITE_CODE_TTL:
+        return None
+    return entry
+
+
+def site_code_message(code: str) -> str:
+    """Текст сообщения с кодом (HTML)."""
+    pretty = f"{code[:4]} {code[4:]}"
+    return (
+        "🔐 <b>Код для сайта Symed</b>\n\n"
+        f"<code>{pretty}</code>\n\n"
+        "Введите его на сайте symed.uz (или symed-web.vercel.app) — для входа "
+        "или в Профиле для привязки Telegram. Код действует 5 минут.\n\n"
+        "⚠️ <b>Никому не сообщайте этот код.</b> По нему можно войти в ваш аккаунт "
+        "и увидеть ваши медицинские данные. Сотрудники Symed никогда его не попросят."
+    )

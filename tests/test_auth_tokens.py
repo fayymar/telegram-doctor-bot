@@ -78,5 +78,5 @@ def test_login_widget():
 
 def test_derive_web_user_id_matches_frontend_formula():
     uid = derive_web_user_id("2b1c1c3e-0000-4000-8000-000000000000")
-    assert 5_000_000_000 <= uid < 10_000_000_000
+    assert 100_000_000_000 <= uid < 2 ** 53
     assert uid == derive_web_user_id("2b1c1c3e-0000-4000-8000-000000000000")

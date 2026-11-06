@@ -16,23 +16,35 @@ Authorization: Bearer <token>
 | Telegram Mini App (symptoMed-app) | `POST /api/auth/telegram-webapp` | `{"init_data": Telegram.WebApp.initData}` |
 | Сайт, Telegram Login Widget | `POST /api/auth/telegram-widget` | объект пользователя от виджета (`id, first_name, …, auth_date, hash`) |
 | Сайт, Google/email (Supabase Auth) | `POST /api/auth/social` | `{"access_token": session.access_token}` |
-| Сайт, 6-значный код через бота | `POST /api/auth/request`, затем опрашивать `GET /api/auth/status/{code}?secret={poll_secret}` | — |
+| Сайт, код из бота | `POST /api/auth/code` | `{"code": "12345678"}` |
 
 Все способы входа возвращают `{"token", "id", "first_name", ...}`. Токен живёт 30 дней.
 Проверить его можно запросом `GET /api/auth/me`.
 
-### Что изменилось для 6-значного кода
-- Код теперь **генерирует сервер**: `POST /api/auth/request` → `{"code", "poll_secret", "expires_in"}`.
-- Узнать результат входа можно только по `poll_secret`. Это не даёт угадать чужой код и войти под чужим аккаунтом.
+### Код из бота (вход и привязка Telegram)
+Код **выдаёт бот** пользователю в его собственный чат: команда `/login`, кнопка «🌐 Войти на сайт» или ссылка
+`t.me/<бот>?start=login`. Пользователь **вводит код на сайте**. Код из 8 цифр, действует 5 минут, одноразовый,
+привязан к Telegram-аккаунту, который его получил.
+
+- Вход: `POST /api/auth/code {"code"}` → токен сессии Telegram-пользователя.
+- Привязка Telegram к веб-аккаунту: `POST /api/auth/link {"code"}` с токеном веб-сессии. Пустые поля веб-профиля
+  заполняются из Telegram-профиля.
+
+Раньше было наоборот: сайт показывал код, а бот его подтверждал. Это позволяло фишинг. Злоумышленник присылал
+жертве ссылку `?start=auth_КОД`, жертва нажимала «Start», и злоумышленник входил в её аккаунт; так же работала
+и привязка. Старые ссылки `auth_` и `link_` теперь ничего не делают.
+
+Ограничения от перебора: 10 попыток в минуту с одного IP и общий лимит неудачных попыток.
 
 ### Что изменилось для `/api/auth/social`
 - Email и `provider_id` из тела больше не принимаются. Нужно передавать `access_token` из сессии Supabase.
-  Сервер сам проверяет его у Supabase. `user_id` вычисляется по той же формуле, что `deriveUserId()` на фронте.
+  Сервер сам проверяет его у Supabase и возвращает `id`; фронтенд его не вычисляет.
+- ID веб-аккаунтов теперь начинаются с 100 000 000 000. Старый диапазон 5–10 млрд пересекался с реальными ID Telegram.
 
 ## Эндпоинты, которым нужен токен
 `/api/profile/*`, `/api/consultations/*`, `/api/medications/*`, `/api/diary/*`,
 `/api/health/heartrate/{id}` (GET), `/api/health/metrics/{id}` (GET), `/api/health/metrics/report/{id}`,
-`/api/consultation/feedback`, `/api/auth/link-request`, `/api/auth/link-status/*`,
+`/api/consultation/feedback`, `/api/auth/link`,
 `/api/auth/me`, `/api/auth/metrics-token`.
 
 Консультацию (`/api/consultation/*`) можно проходить и **гостем**, без токена.
