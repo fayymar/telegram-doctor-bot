@@ -91,9 +91,10 @@ def test_site_code_login_is_one_time():
     code = issue_site_code(_tg_user())
 
     async def t(c):
-        r = await c.post("/api/auth/code", json={"code": "00000000" if code != "00000000" else "11111111"})
+        r = await c.post("/api/auth/code", json={"code": "22222222" if code != "22222222" else "33333333"})
         assert r.status == 400
-        r = await c.post("/api/auth/code", json={"code": code})
+        # пользователь может ввести в нижнем регистре и с дефисом
+        r = await c.post("/api/auth/code", json={"code": f"{code[:4]}-{code[4:]}".lower()})
         data = await r.json()
         assert r.status == 200 and data["id"] == 321 and data["token"]
         r = await c.post("/api/auth/code", json={"code": code})
@@ -166,3 +167,9 @@ def test_client_ip_prefers_cloudflare_header():
     assert main._client_ip(req) not in ("6.6.6.6", "9.9.9.9")
     req = make_mocked_request("GET", "/", headers={"CF-Connecting-IP": "not-an-ip"})
     assert main._client_ip(req) != "not-an-ip"
+
+
+def test_normalize_site_code_accepts_cyrillic_lookalikes():
+    from bot.shared import normalize_site_code
+    assert normalize_site_code("к7rм-4qха") == "K7RM4QXA"
+    assert normalize_site_code(" ab cd ") == "ABCD"

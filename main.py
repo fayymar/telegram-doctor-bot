@@ -1105,21 +1105,9 @@ async def api_consultations_get(request: web.Request) -> web.Response:
 
 # ── Вход и привязка аккаунтов ─────────────────────────────────────────────────
 
-# Защита от перебора 8-значных кодов из бота: лимит на IP + общий лимит неудач
-_CODE_FAIL_WINDOW = 600
-_CODE_GLOBAL_FAIL_LIMIT = 1000
-_code_failures: list = []
-
-
-def _code_guessing_blocked() -> bool:
-    now = _time.time()
-    _code_failures[:] = [t for t in _code_failures if now - t < _CODE_FAIL_WINDOW]
-    return len(_code_failures) >= _CODE_GLOBAL_FAIL_LIMIT
-
-
 async def _redeem_code_from_request(request: web.Request) -> tuple[dict | None, web.Response | None]:
     """Общая часть входа и привязки по коду из бота: лимиты + погашение кода."""
-    if _is_rate_limited(request, "code", limit=10, window=60) or _code_guessing_blocked():
+    if _is_rate_limited(request, "code", limit=10, window=60):
         return None, _rate_limit_response()
     try:
         body = await request.json()
@@ -1127,7 +1115,6 @@ async def _redeem_code_from_request(request: web.Request) -> tuple[dict | None, 
         return None, json_response({"error": "invalid json"}, status=400)
     entry = redeem_site_code(str(body.get("code", "")) if isinstance(body, dict) else "")
     if not entry:
-        _code_failures.append(_time.time())
         return None, json_response({"error": "invalid_code", "message": "Код неверный или истёк"}, status=400)
     return entry, None
 
@@ -1258,7 +1245,7 @@ async def api_auth_social(request: web.Request) -> web.Response:
 
 async def api_auth_code(request: web.Request) -> web.Response:
     """
-    POST /api/auth/code {"code": "12345678"} — вход на сайт по коду, который
+    POST /api/auth/code {"code": "K7RM-4QXA"} — вход на сайт по коду, который
     бот прислал пользователю в его чат (/login). Код одноразовый, 5 минут.
     """
     entry, error = await _redeem_code_from_request(request)
@@ -1284,7 +1271,7 @@ _LINK_MERGE_FIELDS = [
 @auth_required
 async def api_auth_link(request: web.Request) -> web.Response:
     """
-    POST /api/auth/link {"code": "12345678"} — привязать Telegram к ТЕКУЩЕМУ
+    POST /api/auth/link {"code": "K7RM-4QXA"} — привязать Telegram к ТЕКУЩЕМУ
     веб-аккаунту кодом из бота. Пустые поля веб-профиля заполняются из
     Telegram-профиля того же человека (код получил владелец Telegram).
     """
