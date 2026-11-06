@@ -125,6 +125,17 @@ async def start_web(callback: CallbackQuery):
 async def _send_site_code(message: Message, user=None) -> None:
     """Отправляет пользователю одноразовый код для входа/привязки на сайте."""
     from bot.shared import issue_site_code, site_code_message
+    # Код — это ключ к аккаунту: выдаём его только в личном чате с ботом,
+    # иначе в группе его увидят все участники.
+    if message.chat.type != "private":
+        bot_user = await message.bot.get_me()
+        await message.answer(
+            "🔒 Код для входа можно получить только в личном чате с ботом.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Открыть личный чат", url=f"https://t.me/{bot_user.username}?start=login"),
+            ]]),
+        )
+        return
     code = issue_site_code(user or message.from_user)
     await message.answer(
         site_code_message(code),

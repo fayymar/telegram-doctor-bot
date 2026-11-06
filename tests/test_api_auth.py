@@ -173,3 +173,27 @@ def test_normalize_site_code_accepts_cyrillic_lookalikes():
     from bot.shared import normalize_site_code
     assert normalize_site_code("к7rм-4qха") == "K7RM4QXA"
     assert normalize_site_code(" ab cd ") == "ABCD"
+
+
+def test_site_code_not_sent_in_group_chat():
+    from unittest.mock import AsyncMock
+
+    from bot.handlers import basic
+    from bot.shared import site_codes
+
+    msg = SimpleNamespace(
+        chat=SimpleNamespace(type="group"),
+        from_user=_tg_user(999),
+        bot=SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(username="medgg_bot"))),
+        answer=AsyncMock(),
+    )
+    before = dict(site_codes)
+    asyncio.run(basic._send_site_code(msg))
+    assert site_codes == before  # код не создан
+    text = msg.answer.call_args.args[0]
+    assert "личном чате" in text
+
+    msg.chat.type = "private"
+    msg.answer.reset_mock()
+    asyncio.run(basic._send_site_code(msg))
+    assert any(e["telegram_id"] == 999 for e in site_codes.values())
