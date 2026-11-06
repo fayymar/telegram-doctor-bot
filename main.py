@@ -104,18 +104,18 @@ _rate_counters: dict = defaultdict(list)  # (bucket, ip) → [timestamps]
 
 def _client_ip(request: web.Request) -> str:
     """
-    IP клиента для rate limit. На Render перед приложением стоит Cloudflare:
-    он сам выставляет CF-Connecting-IP / True-Client-IP, перезаписывая то, что
-    прислал клиент. X-Forwarded-For не используем: клиент может дописать туда
-    что угодно, а последнее значение — это адрес прокси, общий для всех.
+    IP клиента для rate limit. На Render перед приложением стоит Cloudflare,
+    который всегда перезаписывает CF-Connecting-IP реальным адресом клиента.
+    Другим заголовкам не доверяем: True-Client-IP Cloudflare выставляет только
+    на Enterprise-тарифе (иначе пропускает значение клиента), а X-Forwarded-For
+    клиент может дописать сам, и его последнее значение — адрес прокси.
     """
-    for header in ("CF-Connecting-IP", "True-Client-IP"):
-        value = request.headers.get(header, "").strip()
-        if value:
-            try:
-                return str(ipaddress.ip_address(value))
-            except ValueError:
-                continue
+    value = request.headers.get("CF-Connecting-IP", "").strip()
+    if value:
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError:
+            pass
     return request.remote or "unknown"
 
 

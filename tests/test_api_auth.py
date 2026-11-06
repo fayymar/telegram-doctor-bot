@@ -165,6 +165,8 @@ def test_client_ip_prefers_cloudflare_header():
     # X-Forwarded-For клиент может подделать — не используем его
     req = make_mocked_request("GET", "/", headers={"X-Forwarded-For": "6.6.6.6, 9.9.9.9"})
     assert main._client_ip(req) not in ("6.6.6.6", "9.9.9.9")
+    req = make_mocked_request("GET", "/", headers={"True-Client-IP": "6.6.6.6"})
+    assert main._client_ip(req) != "6.6.6.6"
     req = make_mocked_request("GET", "/", headers={"CF-Connecting-IP": "not-an-ip"})
     assert main._client_ip(req) != "not-an-ip"
 
