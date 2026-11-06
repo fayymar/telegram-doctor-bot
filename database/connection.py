@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import json
 import os
 from functools import partial
 
@@ -20,6 +22,31 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 logger.info("✅ Supabase client initialized successfully")
+
+
+def supabase_key_role(key: str) -> str:
+    """
+    Определяет тип ключа Supabase: "service_role", "anon" или "unknown".
+    Новые ключи: sb_secret_… / sb_publishable_…; старые — JWT с полем role.
+    """
+    if key.startswith("sb_secret_"):
+        return "service_role"
+    if key.startswith("sb_publishable_"):
+        return "anon"
+    try:
+        payload = key.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        return str(claims.get("role", "unknown"))
+    except (IndexError, ValueError):
+        return "unknown"
+
+
+if supabase_key_role(SUPABASE_KEY) == "anon":
+    logger.warning(
+        "⚠️ SUPABASE_KEY is a public (anon) key. The same key is shipped to browsers, "
+        "so anyone can query tables directly. Switch SUPABASE_KEY to the service_role "
+        "key and run migration_enable_rls.sql."
+    )
 
 
 async def run_query(func, *args, **kwargs):
