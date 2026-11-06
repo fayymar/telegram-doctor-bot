@@ -81,6 +81,7 @@ dp.include_router(fallback.router)    # Fallback для зависших FSM (В
 
 # Хранилище сессий в памяти (для MVP)
 consultation_sessions: dict = {}
+_MAX_CONSULTATION_SESSIONS = 2000
 
 # Ссылки на фоновые задачи: без них asyncio может собрать задачу сборщиком мусора
 _background_tasks: set = set()
@@ -317,6 +318,11 @@ async def api_consultation_start(request: web.Request) -> web.Response:
         }, status=422)
 
     session_id = str(uuid.uuid4())
+    # Ограничиваем число сессий в памяти: при переполнении удаляем самые старые
+    if len(consultation_sessions) >= _MAX_CONSULTATION_SESSIONS:
+        oldest = sorted(consultation_sessions, key=lambda k: consultation_sessions[k].get("_created_at"))
+        for sid in oldest[: len(consultation_sessions) - _MAX_CONSULTATION_SESSIONS + 1]:
+            consultation_sessions.pop(sid, None)
     consultation_sessions[session_id] = {
         "_created_at": datetime.now(timezone.utc),
         "user_id": user_id,
@@ -372,7 +378,12 @@ async def api_consultation_answer(request: web.Request) -> web.Response:
 
     try:
         answers = body.get("answers", [])
+        if not isinstance(answers, list):
+            return json_response({"error": "'answers' must be a list"}, status=400)
         questions = session["questions"]
+        # Ответов не может быть больше, чем задано вопросов: иначе большой
+        # список из запроса целиком остался бы в памяти до истечения сессии
+        answers = answers[:max(len(questions), 1)]
 
         # Сохраняем каждый ответ, сопоставляя с вопросом по индексу
         paired = []

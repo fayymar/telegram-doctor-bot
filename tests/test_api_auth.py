@@ -199,3 +199,15 @@ def test_site_code_not_sent_in_group_chat():
     msg.answer.reset_mock()
     asyncio.run(basic._send_site_code(msg))
     assert any(e["telegram_id"] == 999 for e in site_codes.values())
+
+
+def test_answers_capped_to_question_count():
+    main.consultation_sessions["s2"] = {"user_id": None, "questions": [{"question": "q1"}], "answers": []}
+
+    async def t(c):
+        r = await c.post("/api/consultation/answer", json={"session_id": "s2", "answers": ["a"] * 10000})
+        assert r.status == 200
+        assert len(main.consultation_sessions["s2"]["answers"]) == 1
+        r = await c.post("/api/consultation/answer", json={"session_id": "s2", "answers": "x" * 100})
+        assert r.status == 400
+    run(t)
