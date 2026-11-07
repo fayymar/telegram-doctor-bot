@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramConflictError
 from aiogram.types import MenuButtonDefault
 from aiohttp import web
 
-from api.common import consultation_sessions
+from api.common import CONSULTATION_SESSION_TTL, consultation_sessions, consultation_store
 from api.profile import _check_anamnesis_fields
 from api.routes import create_app
 from bot.handlers import (
@@ -24,8 +24,11 @@ from bot.handlers import (
 )
 from bot.instance import bot  # общий для обработчиков и HTTP API
 from bot.middlewares import ConsentMiddleware, FSMTimeoutMiddleware
-from bot.shared import site_codes
+from bot.shared import site_code_store, site_codes
+from config import FSM_TIMEOUT
 from database.connection import run_query, supabase_client
+from services import persistent_state
+from services.persistent_state import PersistentMemoryStorage
 from services.sessions import load_revocations, revocation_sync_loop
 from utils.logger import setup_logger
 
@@ -37,7 +40,9 @@ logging.basicConfig(
 logger = setup_logger(__name__)
 
 
-dp = Dispatcher()
+# Шаги диалогов бота (анкета, консультация, дневник) хранятся и в базе —
+# чтобы перезапуск сервера не обрывал их (services/persistent_state.py)
+dp = Dispatcher(storage=PersistentMemoryStorage(keep_seconds=FSM_TIMEOUT))
 
 # Регистрация middleware
 dp.message.middleware(FSMTimeoutMiddleware())
@@ -66,13 +71,16 @@ async def cleanup_stale_sessions():
         stale = []
         for sid, session in list(consultation_sessions.items()):
             created = session.get("_created_at")
-            if created and (now - created).total_seconds() > 7200:
+            if created and (now - created).total_seconds() > CONSULTATION_SESSION_TTL:
                 stale.append(sid)
         for sid in stale:
             consultation_sessions.pop(sid, None)
+            consultation_store.save(sid)
         for code, entry in list(site_codes.items()):
             if _time.time() - entry["created_at"] > 300:
                 site_codes.pop(code, None)
+                site_code_store.save(code)
+        await persistent_state.purge_old_all()
         if stale:
             logger.info(f"Cleaned up {len(stale)} stale consultation sessions")
 
@@ -210,6 +218,9 @@ async def main():
             await load_revocations()
         except Exception as e:
             logger.error(f"Initial token revocation load failed: {type(e).__name__}")
+        # Незавершённые консультации, коды входа и шаги диалогов — до запуска
+        # бота и API, чтобы первые же запросы их видели
+        await persistent_state.load_all()
         task_names = ("web_server", "bot", "cleanup_stale_sessions", "supabase_keepalive", "revocation_sync")
         results = await asyncio.gather(
             start_web_server(),

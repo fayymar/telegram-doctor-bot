@@ -53,6 +53,16 @@ def _is_duration_question(question_text: str) -> bool:
 
 
 async def _save_consultation(user_id: int, all_data: dict, result: dict):
+    # Пока шёл запрос к AI, пользователь мог удалить данные (/deletedata,
+    # блокировка бота): без согласия запись о здоровье не создаём
+    from services.consent import has_consent
+    try:
+        if not await has_consent(user_id):
+            logger.info("Consultation not saved: consent withdrawn during analysis")
+            return
+    except Exception as e:
+        logger.error(f"Consent re-check failed: {type(e).__name__}")
+        return
     try:
         specialists = result.get("specialists", [])
         top = specialists[0] if specialists else {}

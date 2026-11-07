@@ -13,8 +13,10 @@ from api.common import (
     _is_rate_limited,
     _rate_limit_response,
     _token_user_id,
+    _unauthorized,
     auth_required,
     consultation_sessions,
+    consultation_store,
     json_response,
 )
 from database.connection import run_query, supabase_client
@@ -113,11 +115,18 @@ async def api_consultation_start(request: web.Request) -> web.Response:
             "message": "Похоже, это не описание симптомов. Опишите, что вас беспокоит (например: болит голова, температура, кашель).",
         }, status=422)
 
+    # Пока шли запросы к AI (несколько секунд), аккаунт могли удалить или выйти
+    # на всех устройствах: тогда токен уже отозван, и сессию не создаём — иначе
+    # данные о здоровье удалённого аккаунта остались бы в памяти и в базе
+    if user_id and _token_user_id(request) != user_id:
+        return _unauthorized()
+
     # Ограничиваем число сессий в памяти: при переполнении удаляем самые старые
     if len(consultation_sessions) >= _MAX_CONSULTATION_SESSIONS:
         oldest = sorted(consultation_sessions, key=lambda k: consultation_sessions[k].get("_created_at"))
         for sid in oldest[: len(consultation_sessions) - _MAX_CONSULTATION_SESSIONS + 1]:
             consultation_sessions.pop(sid, None)
+            consultation_store.save(sid)
     consultation_sessions[session_id] = {
         "_created_at": datetime.now(timezone.utc),
         "user_id": user_id,
@@ -131,6 +140,7 @@ async def api_consultation_start(request: web.Request) -> web.Response:
         "health_metrics": health_metrics,
         "red_flag": red_flag,
     }
+    consultation_store.save(session_id)
 
     return json_response({
         "session_id": session_id,
@@ -172,6 +182,7 @@ async def api_consultation_answer(request: web.Request) -> web.Response:
             q_text = questions[i]["question"] if i < len(questions) else ""
             paired.append({"question": q_text, "answer": str(ans)[:500]})
         session["answers"] = paired
+        consultation_store.save(session_id)
 
         return json_response({"next_step": "duration"})
     except Exception as e:
@@ -202,10 +213,12 @@ async def api_consultation_duration(request: web.Request) -> web.Response:
 
     try:
         session["duration"] = duration
+        consultation_store.save(session_id)
 
         # Генерация анамнестических вопросов
         anamnesis_questions = await get_anamnesis_questions(session["symptoms"])
         session["anamnesis_questions"] = anamnesis_questions
+        consultation_store.save(session_id)
 
         # Нормализуем ключ: question → text для Mini App
         normalized = [
@@ -255,6 +268,7 @@ async def api_consultation_result(request: web.Request) -> web.Response:
         else:
             anamnesis_answers = raw_anamnesis
         session["anamnesis_answers"] = anamnesis_answers
+        consultation_store.save(session_id)
 
         all_data = {
             "symptoms": session["symptoms"],
@@ -271,6 +285,13 @@ async def api_consultation_result(request: web.Request) -> web.Response:
             health_metrics=session.get("health_metrics"),
             red_flag=bool(session.get("red_flag")),
         )
+
+        # Пока шёл запрос к AI, аккаунт могли удалить (токен отозван): тогда
+        # итог не сохраняем — иначе запись о здоровье появилась бы уже после удаления
+        if session.get("user_id") and _token_user_id(request) != session["user_id"]:
+            consultation_sessions.pop(str(session_id), None)
+            consultation_store.save(session_id)
+            return _unauthorized()
 
         # Сохраняем в Supabase (только для авторизованных пользователей)
         specialists_raw = recommendation.get("specialists", [])
@@ -301,6 +322,7 @@ async def api_consultation_result(request: web.Request) -> web.Response:
 
         # Clean up session from memory after successful result
         consultation_sessions.pop(session_id, None)
+        consultation_store.save(session_id)
         logger.info(f"Session {session_id} cleaned up after result")
 
         return json_response({

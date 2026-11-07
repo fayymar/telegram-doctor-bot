@@ -5,6 +5,7 @@ import ipaddress
 import json
 import time as _time
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from aiohttp import web
 
@@ -15,16 +16,63 @@ from security.auth import (
     verify_token,
 )
 from services.consent import CONSENT_VERSION, has_consent
+from services.persistent_state import DictStore, _parse_dt
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
 
-# Хранилище сессий в памяти (для MVP)
+# Незавершённые консультации: рабочая копия в памяти, копия в базе — чтобы
+# консультация пережила перезапуск сервера (services/persistent_state.py).
+# После любого изменения сессии вызывайте consultation_store.save(session_id).
 consultation_sessions: dict = {}
-
-
 _MAX_CONSULTATION_SESSIONS = 2000
+CONSULTATION_SESSION_TTL = 7200  # незавершённая консультация живёт 2 часа
+
+
+# Обычная сессия консультации — единицы КБ. Слишком большую (например, с
+# огромными полями профиля) в базу не пишем: она остаётся только в памяти,
+# как раньше, и не раздувает базу и загрузку при старте
+_MAX_PERSISTED_SESSION_BYTES = 64 * 1024
+
+
+def _session_to_row(session_id: str, session: dict) -> dict | None:
+    # Гостевые консультации в базу не пишем: по политике конфиденциальности
+    # их данные есть только в памяти сервера
+    if session.get("user_id") is None:
+        return None
+    data = {k: v for k, v in session.items() if k != "_created_at"}
+    size = len(json.dumps(data, ensure_ascii=False, default=str).encode())
+    if size > _MAX_PERSISTED_SESSION_BYTES:
+        logger.warning(f"Consultation session too large to persist ({size} bytes)")
+        return None
+    created = session.get("_created_at")
+    return {
+        "session_id": session_id,
+        "user_id": session["user_id"],
+        "data": data,
+        "created_at": created.isoformat() if created else None,
+    }
+
+
+def _session_from_row(row: dict) -> tuple[str, dict]:
+    session = dict(row.get("data") or {})
+    session["user_id"] = row.get("user_id")
+    session["_created_at"] = _parse_dt(row.get("created_at")) or datetime.now(timezone.utc)
+    return str(row["session_id"]), session
+
+
+consultation_store = DictStore(
+    consultation_sessions,
+    "consultation_sessions",
+    "session_id",
+    to_row=_session_to_row,
+    from_row=_session_from_row,
+    owner=lambda s: s.get("user_id"),
+    keep_seconds=CONSULTATION_SESSION_TTL,
+    max_items=_MAX_CONSULTATION_SESSIONS,
+    require_consent=True,
+)
 
 
 # Ссылки на фоновые задачи: без них asyncio может собрать задачу сборщиком мусора

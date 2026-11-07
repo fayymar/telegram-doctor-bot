@@ -58,7 +58,8 @@ def test_delete_all_user_data_covers_every_table(monkeypatch):
     consent._consent_cache[5] = consent.CONSENT_VERSION
     asyncio.run(consent.delete_all_user_data(5))
     assert {t for t, _ in deleted} == {"messages", "consultations", "medications", "health_diary",
-                                       "health_metrics", "consents", "user_profiles"}
+                                       "health_metrics", "consents", "user_profiles",
+                                       "consultation_sessions", "fsm_states", "site_codes"}
     # consents — первой и ещё раз в конце (на случай параллельно вставленного согласия)
     assert deleted[0][0] == "consents" and deleted[-1][0] == "consents"
     assert deleted[-2][0] == "user_profiles"
@@ -344,3 +345,50 @@ def test_partial_failure_keeps_profile_with_auth_uid(monkeypatch):
         asyncio.run(consent.delete_all_user_data(5))
     assert "user_profiles" not in {t for t, _ in deleted}
     assert "health_diary" in {t for t, _ in deleted}
+
+
+def test_delete_forgets_in_progress_state_of_this_user_only(monkeypatch):
+    # незавершённые консультации, коды входа и шаги диалогов бота тоже стираются
+    from aiogram.fsm.storage.base import StorageKey
+    from api.common import consultation_sessions
+    from bot.shared import site_codes
+    from services.persistent_state import PersistentMemoryStorage
+    _fake_db(monkeypatch, [{"user_id": 5}])
+    consultation_sessions["mine"] = {"user_id": 5}
+    consultation_sessions["other"] = {"user_id": 6}
+    site_codes["AAAA2222"] = {"telegram_id": 5, "created_at": 0}
+    site_codes["BBBB3333"] = {"telegram_id": 6, "created_at": 0}
+    fsm = PersistentMemoryStorage()
+    mine, other = StorageKey(1, 5, 5), StorageKey(1, 6, 6)
+
+    async def go():
+        await fsm.set_data(mine, {"symptoms": "кашель"})
+        await fsm.set_data(other, {"symptoms": "насморк"})
+        await consent.delete_all_user_data(5)
+        return await fsm.get_data(mine), await fsm.get_data(other)
+    try:
+        mine_data, other_data = asyncio.run(go())
+        assert mine_data == {} and other_data == {"symptoms": "насморк"}
+        assert "mine" not in consultation_sessions and "other" in consultation_sessions
+        assert "AAAA2222" not in site_codes and "BBBB3333" in site_codes
+    finally:
+        consultation_sessions.pop("other", None)
+        site_codes.pop("BBBB3333", None)
+        from services import persistent_state
+        persistent_state._stores.remove(fsm)
+
+
+def test_bot_consultation_not_saved_after_consent_withdrawn(monkeypatch):
+    # /deletedata во время анализа: итог консультации в базу не записывается
+    from bot.handlers import consultation as bot_consultation
+    inserted = []
+
+    async def no(uid):
+        return False
+    monkeypatch.setattr(consent, "has_consent", no)
+
+    async def rq(func, *a, **kw):
+        inserted.append(func)
+    monkeypatch.setattr(bot_consultation, "run_query", rq)
+    asyncio.run(bot_consultation._save_consultation(5, {"symptoms": "x"}, {"specialists": []}))
+    assert inserted == []
