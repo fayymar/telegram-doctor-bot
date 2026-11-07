@@ -271,3 +271,30 @@ def test_telegram_account_has_no_supabase_login(monkeypatch):
     deleted_auth = _fake_db_with_auth(monkeypatch, [{"user_id": 7}], auth_users=["x"])
     asyncio.run(consent.delete_all_user_data(7))
     assert deleted_auth == []
+
+
+def test_failed_purge_keeps_supabase_login(monkeypatch):
+    # если часть данных не удалилась, вход не удаляем — иначе остаток не найти
+    from security.auth import derive_web_user_id
+    uid = "11111111-2222-3333-4444-555555555555"
+    web_id = derive_web_user_id(uid)
+    deleted_auth = _fake_db_with_auth(monkeypatch, [{"user_id": web_id, "auth_uid": uid}], auth_users=[])
+    # заставим удаление из user_profiles упасть
+    orig_table = consent.supabase_client.table
+
+    def table(name):
+        q = orig_table(name)
+        if name == "user_profiles":
+            orig_delete = q.delete
+
+            def delete():
+                orig_delete()
+                q.execute = lambda: (_ for _ in ()).throw(RuntimeError("db"))
+                return q
+            q.delete = delete
+        return q
+    consent.supabase_client.table = table
+    import pytest
+    with pytest.raises(RuntimeError):
+        asyncio.run(consent.delete_all_user_data(web_id))
+    assert deleted_auth == []

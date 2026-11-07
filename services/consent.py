@@ -98,7 +98,7 @@ async def record_consent(user_id: int | None, source: str, session_id: str | Non
 _USER_TABLES = ("consents", "messages", "consultations", "medications", "health_diary", "health_metrics", "user_profiles")
 
 
-async def _linked_user_ids(user_id: int) -> list[int]:
+async def linked_user_ids(user_id: int) -> list[int]:
     """
     Аккаунты, связанные с user_id привязкой сайт <-> Telegram (/api/auth/link).
     Привязка возможна только кодом, который бот выдаёт владельцу Telegram, поэтому
@@ -186,7 +186,7 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
     пробрасывается, чтобы пользователь узнал о сбое.
     """
     try:
-        ids = await _linked_user_ids(user_id) if include_linked else [user_id]
+        ids = await linked_user_ids(user_id) if include_linked else [user_id]
     except Exception as e:
         logger.error(f"Linked accounts lookup failed for user {user_id}: {type(e).__name__}")
         raise RuntimeError("failed to resolve linked accounts") from e
@@ -200,8 +200,10 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
         from services.sessions import revoke_all_tokens
         await revoke_all_tokens(ids)
     except Exception as e:
-        # В памяти токены уже отозваны; не сохранилось только в базе
+        # В памяти токены уже отозваны; запись в базу повторится в фоне, но сообщаем
+        # о сбое, чтобы пользователь повторил удаление
         logger.error(f"Token revocation persist failed for user {user_id}: {type(e).__name__}")
+        failed.append("token_revocation")
     # Вход через Google/Apple/email (Supabase Auth) тоже удаляем — вместе с email.
     # UUID ищем до удаления профиля: он хранится там.
     try:
@@ -224,7 +226,11 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
         logger.error(f"Delete user data failed: table=consents (final) user={user_id}: {type(e).__name__}")
         if "consents" not in failed:
             failed.append("consents")
-    for uid in auth_uids.values():
+    # Вход Supabase удаляем, только если все данные действительно стёрты: иначе
+    # человек потерял бы единственный способ войти и удалить оставшееся (новый вход
+    # через Google/email — это новый аккаунт с другим номером)
+    data_failed = [t for t in failed if t in _USER_TABLES]
+    for uid in ([] if data_failed else auth_uids.values()):
         try:
             await run_query(supabase_client.auth.admin.delete_user, uid)
         except Exception as e:
