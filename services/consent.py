@@ -40,6 +40,9 @@ CONSENT_TEXT_HTML = (
 # Кэш: user_id -> версия согласия (чтобы не ходить в базу на каждое сообщение)
 _consent_cache: dict[int, str] = {}
 _CACHE_LIMIT = 50_000
+# Счётчик удалений данных: проверка, начатая до удаления, не должна
+# закэшировать согласие, прочитанное из ещё не удалённых строк
+_deletions = 0
 
 
 def _remember(user_id: int, version: str) -> None:
@@ -52,6 +55,7 @@ async def has_consent(user_id: int) -> bool:
     """Дал ли пользователь согласие на текущую версию текста."""
     if _consent_cache.get(user_id) == CONSENT_VERSION:
         return True
+    started_at = _deletions
     resp = await run_query(
         lambda: supabase_client.table("consents")
         .select("version")
@@ -61,7 +65,8 @@ async def has_consent(user_id: int) -> bool:
         .execute()
     )
     if resp.data:
-        _remember(user_id, CONSENT_VERSION)
+        if _deletions == started_at:
+            _remember(user_id, CONSENT_VERSION)
         return True
     return False
 
@@ -135,6 +140,8 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
     except Exception as e:
         logger.error(f"Linked accounts lookup failed for user {user_id}: {type(e).__name__}")
         raise RuntimeError("failed to resolve linked accounts") from e
+    global _deletions
+    _deletions += 1
     for uid in ids:
         _consent_cache.pop(uid, None)
     failed = []
@@ -146,6 +153,7 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
             failed.append(table)
     # Повторно: параллельная проверка has_consent могла снова закэшировать
     # согласие, пока строки ещё не были удалены
+    _deletions += 1
     for uid in ids:
         _consent_cache.pop(uid, None)
     if failed:

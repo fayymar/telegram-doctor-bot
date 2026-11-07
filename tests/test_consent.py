@@ -156,3 +156,19 @@ def test_consent_cache_cleared_after_rows_deleted(monkeypatch):
     monkeypatch.setattr(consent, "run_query", racing_run_query)
     asyncio.run(consent.delete_all_user_data(5))
     assert deleted and 5 not in consent._consent_cache
+
+
+def test_has_consent_started_before_deletion_does_not_cache(monkeypatch):
+    # has_consent прочитал строку до удаления, а ответ пришёл после него
+    async def slow_run_query(func, *a, **kw):
+        consent._deletions += 1  # удаление произошло, пока шёл запрос
+        return SimpleNamespace(data=[{"version": consent.CONSENT_VERSION}])
+    monkeypatch.setattr(consent, "run_query", slow_run_query)
+
+    class Q:
+        def __getattr__(self, name):
+            return lambda *a, **kw: self
+    monkeypatch.setattr(consent, "supabase_client", SimpleNamespace(table=lambda t: Q()))
+    consent._consent_cache.pop(6, None)
+    assert asyncio.run(consent.has_consent(6)) is True
+    assert 6 not in consent._consent_cache
