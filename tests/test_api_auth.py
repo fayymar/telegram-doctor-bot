@@ -322,3 +322,33 @@ def test_guest_consultation_stops_if_consent_not_saved(monkeypatch):
                          json={"symptoms": "болит голова", "consent_version": main.CONSENT_VERSION})
         assert r.status == 503
     run(t)
+
+
+def test_consultation_not_created_if_account_deleted_during_ai_call(monkeypatch):
+    # аккаунт удалили (токены отозваны), пока шёл запрос к AI — сессию не создаём
+    from security import revocation
+
+    async def yes(uid):
+        return True
+    patch_api(monkeypatch, "has_consent", yes)
+
+    async def run_query(func, *a, **kw):
+        return type("R", (), {"data": []})() if not a else ([] if "history" in func.__name__ else {"has_any_data": False})
+    patch_api(monkeypatch, "run_query", run_query)
+
+    def red_flags(symptoms, health_metrics=None):
+        revocation.remember_cutoff(100, revocation.now_ms())  # «удаление» посреди запроса
+        return {"red_flag": False}
+    patch_api(monkeypatch, "check_red_flags", red_flags)
+
+    async def questions(*a, **kw):
+        return [{"question": "Давно?"}]
+    patch_api(monkeypatch, "parse_and_generate_questions", questions)
+    before = set(main.consultation_sessions)
+
+    async def t(c):
+        r = await c.post("/api/consultation/start", json={"symptoms": "болит голова"},
+                         headers={"Authorization": f"Bearer {issue_token(100)}"})
+        assert r.status == 401, await r.text()
+    run(t)
+    assert set(main.consultation_sessions) == before

@@ -299,3 +299,22 @@ def test_code_is_refused_if_db_delete_fails(db, monkeypatch):
         monkeypatch.setattr(persistent_state, "run_query", down)
         return await shared.redeem_site_code(code)
     assert asyncio.run(go()) is None
+
+
+def test_no_db_write_for_user_right_after_account_deletion(db):
+    # обработчик, начатый до удаления, дописывает данные уже после него —
+    # в базу они попасть не должны
+    key = StorageKey(bot_id=1, chat_id=90, user_id=90)
+
+    async def go():
+        fsm = PersistentMemoryStorage()
+        try:
+            await persistent_state.forget_user(90)
+            await fsm.set_data(key, {"symptoms": "после удаления"})
+            consultation_sessions["late"] = {"_created_at": datetime.now(timezone.utc), "user_id": 90}
+            consultation_store.save("late")
+            await persistent_state.wait_all()
+        finally:
+            persistent_state._stores.remove(fsm)
+    asyncio.run(go())
+    assert not db.get("fsm_states") and not db.get("consultation_sessions")

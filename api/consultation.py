@@ -13,6 +13,7 @@ from api.common import (
     _is_rate_limited,
     _rate_limit_response,
     _token_user_id,
+    _unauthorized,
     auth_required,
     consultation_sessions,
     consultation_store,
@@ -113,6 +114,12 @@ async def api_consultation_start(request: web.Request) -> web.Response:
             "error": "not_medical",
             "message": "Похоже, это не описание симптомов. Опишите, что вас беспокоит (например: болит голова, температура, кашель).",
         }, status=422)
+
+    # Пока шли запросы к AI (несколько секунд), аккаунт могли удалить или выйти
+    # на всех устройствах: тогда токен уже отозван, и сессию не создаём — иначе
+    # данные о здоровье удалённого аккаунта остались бы в памяти и в базе
+    if user_id and _token_user_id(request) != user_id:
+        return _unauthorized()
 
     # Ограничиваем число сессий в памяти: при переполнении удаляем самые старые
     if len(consultation_sessions) >= _MAX_CONSULTATION_SESSIONS:
