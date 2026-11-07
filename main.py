@@ -1415,6 +1415,8 @@ async def api_consent_get(request: web.Request) -> web.Response:
 @auth_required
 async def api_consent_post(request: web.Request) -> web.Response:
     """POST /api/consent {"version", "source": "web"|"miniapp"} — фиксирует согласие."""
+    if _is_rate_limited(request, "consent", limit=10, window=60):
+        return _rate_limit_response()
     try:
         body = await request.json()
     except Exception:

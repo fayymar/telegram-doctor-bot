@@ -112,3 +112,33 @@ def test_bot_removed_from_group_does_not_delete_data(monkeypatch):
     assert calls == []
     asyncio.run(basic.on_user_blocked_bot(update("private")))
     assert calls == [(42, False)]
+
+
+def test_record_consent_is_idempotent_per_version(monkeypatch):
+    inserts = []
+
+    class Q:
+        def __init__(self, table):
+            self.table = table
+        def select(self, *a):
+            return self
+        def eq(self, *a):
+            return self
+        def limit(self, *a):
+            return self
+        def insert(self, row):
+            inserts.append(row)
+            return self
+        def execute(self):
+            return SimpleNamespace(data=[{"version": consent.CONSENT_VERSION}] if inserts else [])
+
+    monkeypatch.setattr(consent, "supabase_client", SimpleNamespace(table=lambda t: Q(t)))
+
+    async def fake_run_query(func, *a, **kw):
+        return func()
+    monkeypatch.setattr(consent, "run_query", fake_run_query)
+
+    consent._consent_cache.pop(77, None)
+    for _ in range(3):
+        asyncio.run(consent.record_consent(77, "web"))
+    assert len(inserts) == 1

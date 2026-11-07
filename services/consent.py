@@ -67,9 +67,13 @@ async def has_consent(user_id: int) -> bool:
 
 
 async def record_consent(user_id: int | None, source: str, session_id: str | None = None) -> None:
-    """Записывает факт согласия на текущую версию текста."""
+    """Записывает факт согласия на текущую версию текста (для вошедшего — один раз на версию)."""
     if source not in CONSENT_SOURCES:
         raise ValueError(f"unknown consent source: {source}")
+    # Повторное согласие на ту же версию не создаёт новых строк (у гостя нет user_id —
+    # его согласие привязано к конкретной консультации и записывается один раз на неё)
+    if user_id is not None and await has_consent(user_id):
+        return
     row = {"version": CONSENT_VERSION, "source": source}
     if user_id is not None:
         row["user_id"] = user_id
