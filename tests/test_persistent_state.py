@@ -149,8 +149,8 @@ def test_site_code_survives_restart_and_stays_one_time(db):
         await persistent_state.wait_all()
         _restart()
         await shared.site_code_store.load()
-        first = shared.redeem_site_code(code)
-        second = shared.redeem_site_code(code)
+        first = await shared.redeem_site_code(code)
+        second = await shared.redeem_site_code(code)
         await persistent_state.wait_all()
         return first, second
     first, second = asyncio.run(go())
@@ -269,3 +269,33 @@ def test_restore_keeps_memory_limit_and_ttl(db, monkeypatch):
         await consultation_store.load()
     asyncio.run(go())
     assert set(consultation_sessions) == {"s0", "s1"}
+
+
+def test_redeemed_code_cannot_come_back_after_restart(db):
+    # код погашен; сразу «перезапуск» — в базе его быть не должно уже в момент входа
+    user = SimpleNamespace(id=78, first_name="", last_name="", username="")
+
+    async def go():
+        code = shared.issue_site_code(user)  # фоновая запись ещё не дошла до базы
+        assert await shared.redeem_site_code(code)
+        _restart()  # без ожидания фоновых записей
+        await shared.site_code_store.load()
+        return await shared.redeem_site_code(code)
+    assert asyncio.run(go()) is None
+    assert db["site_codes"] == []
+
+
+def test_code_is_refused_if_db_delete_fails(db, monkeypatch):
+    # не удалось погасить код в базе — не пускаем (иначе его можно повторить)
+    user = SimpleNamespace(id=79, first_name="", last_name="", username="")
+    monkeypatch.setattr(persistent_state, "_RETRY_DELAY", 0)
+
+    async def go():
+        code = shared.issue_site_code(user)
+        await persistent_state.wait_all()
+
+        async def down(func, *a, **kw):
+            raise RuntimeError("db down")
+        monkeypatch.setattr(persistent_state, "run_query", down)
+        return await shared.redeem_site_code(code)
+    assert asyncio.run(go()) is None

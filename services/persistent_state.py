@@ -208,6 +208,23 @@ class DictStore:
             lambda: supabase_client.table(self.table).delete().lt(self.time_col, cutoff).execute()
         )
 
+    async def delete_now(self, rid) -> None:
+        """
+        Удаляет запись из базы сразу и сообщает об ошибке (в отличие от save,
+        который пишет в фоне). Нужно там, где запись нельзя оставить в базе ни
+        на миг: погашенный код входа после перезапуска подгрузился бы снова.
+        Запись должна быть уже убрана из словаря.
+        """
+        rid = str(rid)
+        # дождаться фоновой записи (она могла ещё вставлять эту строку) …
+        self._writer.schedule(rid)
+        await self._writer.wait({rid})
+        # … и удалить явно: фоновая запись не сообщает об ошибках
+        await run_query(
+            lambda: supabase_client.table(self.table).delete().eq(self.id_col, rid).execute()
+        )
+        self._writer.persisted.discard(rid)
+
     async def forget_user(self, user_id: int) -> None:
         rids = [rid for rid, item in list(self.items.items()) if self._owner(item) == user_id]
         for rid in rids:

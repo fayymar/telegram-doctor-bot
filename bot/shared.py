@@ -12,6 +12,9 @@ import time
 from datetime import datetime, timezone
 
 from services.persistent_state import DictStore, _parse_dt
+from utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 SITE_CODE_TTL = 300  # код действует 5 минут
 # 8 символов без похожих (0/O, 1/I/L): 31^8 ≈ 8.5·10^11 вариантов. При лимите
@@ -106,13 +109,21 @@ def normalize_site_code(code: str) -> str:
     return "".join(ch for ch in up if ch in SITE_CODE_ALPHABET)
 
 
-def redeem_site_code(code: str) -> dict | None:
+async def redeem_site_code(code: str) -> dict | None:
     """Погашает код (одноразово). Возвращает данные Telegram-пользователя или None."""
     code = normalize_site_code(code)
     entry = site_codes.pop(code, None)
-    if entry:
-        site_code_store.save(code)
-    if not entry or time.time() - entry["created_at"] > SITE_CODE_TTL:
+    if not entry:
+        return None
+    # Гасим и в базе ДО входа: иначе после перезапуска сервера код подгрузился
+    # бы снова и сработал второй раз. Не удалось — не пускаем (код уже погашен
+    # в памяти, человек просто запросит новый)
+    try:
+        await site_code_store.delete_now(code)
+    except Exception as e:
+        logger.error(f"Site code redeem: DB delete failed: {type(e).__name__}")
+        return None
+    if time.time() - entry["created_at"] > SITE_CODE_TTL:
         return None
     return entry
 

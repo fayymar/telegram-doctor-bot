@@ -43,7 +43,7 @@ async def _redeem_code_from_request(request: web.Request) -> tuple[dict | None, 
         body = await request.json()
     except Exception:
         return None, json_response({"error": "invalid json"}, status=400)
-    entry = redeem_site_code(str(body.get("code", "")) if isinstance(body, dict) else "")
+    entry = await redeem_site_code(str(body.get("code", "")) if isinstance(body, dict) else "")
     if not entry:
         return None, json_response({"error": "invalid_code", "message": "Код неверный или истёк"}, status=400)
     return entry, None
