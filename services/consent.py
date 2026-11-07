@@ -181,6 +181,12 @@ async def delete_all_user_data(user_id: int) -> None:
         logger.error(f"Token revocation persist failed for user {user_id}: {type(e).__name__}")
         failed.append("token_revocation")
     for table in _USER_TABLES:
+        if table == "user_profiles" and any(t in _USER_TABLES for t in failed):
+            # Профиль (последний в списке) хранит auth_uid — указатель на вход
+            # Supabase. Если что-то не удалилось, оставляем профиль, чтобы повтор
+            # удаления нашёл и вход, и остаток данных
+            failed.append(table)
+            continue
         try:
             await run_query(lambda t=table: supabase_client.table(t).delete().in_("user_id", ids).execute())
         except Exception as e:

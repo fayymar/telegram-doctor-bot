@@ -326,3 +326,21 @@ def test_auth_lookup_failure_deletes_nothing(monkeypatch):
     with pytest.raises(RuntimeError):
         asyncio.run(consent.delete_all_user_data(5))
     assert deleted == [] and _fake_db.updated == [] and revoked == []
+
+
+def test_partial_failure_keeps_profile_with_auth_uid(monkeypatch):
+    # одна таблица не удалилась — профиль (с auth_uid) и вход остаются для повтора
+    import pytest
+    deleted = _fake_db(monkeypatch, [{"user_id": 5}])
+    orig_table = consent.supabase_client.table
+
+    def table(name):
+        q = orig_table(name)
+        if name == "messages":
+            q.execute = lambda: (_ for _ in ()).throw(RuntimeError("db"))
+        return q
+    consent.supabase_client.table = table
+    with pytest.raises(RuntimeError):
+        asyncio.run(consent.delete_all_user_data(5))
+    assert "user_profiles" not in {t for t, _ in deleted}
+    assert "health_diary" in {t for t, _ in deleted}
