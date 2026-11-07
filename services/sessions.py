@@ -15,8 +15,10 @@ from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# Для бессрочных токенов (старые токены метрик) запись об отзыве храним год
-_NO_EXP_KEEP = 365 * 24 * 3600
+# Бессрочный токен (токен метрик) действует всегда, поэтому и запись о его отзыве
+# не должна истекать: иначе после чистки старых записей токен снова заработал бы.
+# Берём заведомо далёкую дату (01.01.9999), которую чистка никогда не достигнет
+_NO_EXP_FOREVER = 253370764800.0
 REVOCATION_REFRESH_INTERVAL = 600
 REVOCATION_RETRY_INTERVAL = 30  # пока список не загружен — пробуем чаще
 
@@ -41,7 +43,7 @@ async def revoke_token(payload: dict) -> None:
         # У старых токенов нет jti — отозвать отдельно нельзя, выходим везде
         await revoke_all_tokens([int(payload["uid"])])
         return
-    exp = float(payload.get("exp") or (revocation.now_ms() / 1000 + _NO_EXP_KEEP))
+    exp = float(payload.get("exp") or _NO_EXP_FOREVER)
     revocation.remember_revoked_token(jti, exp)
     _pending_tokens[jti] = exp
     await _flush_pending()

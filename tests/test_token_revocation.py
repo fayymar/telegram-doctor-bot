@@ -263,3 +263,13 @@ def test_concurrent_logout_all_keeps_latest_cutoff(monkeypatch):
     asyncio.run(scenario())
     final = [r for batch in captured for r in batch if r["user_id"] == 5][-1]["not_before_ms"]
     assert final == revocation._cutoff_ms[5]
+
+
+def test_revoked_non_expiring_token_stays_revoked(monkeypatch):
+    # токен метрик бессрочный: запись о его отзыве не должна истечь и удалиться
+    import time
+    tok = issue_token(5, scope=SCOPE_METRICS, ttl=None)
+    asyncio.run(sessions.revoke_token(decode_token(tok, (SCOPE_METRICS,))))
+    monkeypatch.setattr(time, "time", lambda: 200 * 365 * 24 * 3600 + 1_700_000_000)
+    revocation.purge_expired()
+    assert verify_token(tok, (SCOPE_METRICS,)) is None
