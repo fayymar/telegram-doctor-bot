@@ -15,6 +15,10 @@ import time
 _revoked_jti: dict[str, float] = {}
 # user_id -> момент (мс): токены, выданные не позже него, недействительны
 _cutoff_ms: dict[int, int] = {}
+# Пока список отзывов не загружен из базы (например, база недоступна при старте),
+# токены, выданные до запуска процесса, не принимаем: среди них могут быть отозванные
+_loaded = False
+_started_ms = int(time.time() * 1000)
 
 
 def token_issued_ms(payload: dict) -> int:
@@ -26,6 +30,8 @@ def token_issued_ms(payload: dict) -> int:
 
 
 def is_revoked(uid: int, payload: dict) -> bool:
+    if not _loaded and token_issued_ms(payload) < _started_ms:
+        return True
     cutoff = _cutoff_ms.get(uid)
     if cutoff is not None and token_issued_ms(payload) <= cutoff:
         return True
@@ -52,6 +58,15 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def mark_loaded() -> None:
+    global _loaded
+    _loaded = True
+
+
+def is_loaded() -> bool:
+    return _loaded
+
+
 def purge_expired() -> None:
     now = time.time()
     for jti, exp in list(_revoked_jti.items()):
@@ -59,6 +74,9 @@ def purge_expired() -> None:
             _revoked_jti.pop(jti, None)
 
 
-def _reset_for_tests() -> None:
+def _reset_for_tests(loaded: bool = True) -> None:
+    global _loaded, _started_ms
     _revoked_jti.clear()
     _cutoff_ms.clear()
+    _loaded = loaded
+    _started_ms = int(time.time() * 1000)

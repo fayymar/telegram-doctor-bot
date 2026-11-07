@@ -122,3 +122,15 @@ def test_account_deletion_revokes_tokens(monkeypatch):
     tok = issue_token(7)
     asyncio.run(consent.delete_all_user_data(7))
     assert verify_token(tok) is None
+
+
+def test_tokens_issued_before_start_rejected_until_revocations_loaded():
+    import time
+    old = issue_token(5)
+    time.sleep(0.005)
+    revocation._reset_for_tests(loaded=False)  # «перезапуск», база ещё не прочитана
+    assert verify_token(old) is None
+    fresh = issue_token(5)  # выдан после старта — принимается
+    assert verify_token(fresh) == 5
+    asyncio.run(sessions.load_revocations())
+    assert verify_token(old) == 5  # отзывов нет — старый токен снова действует

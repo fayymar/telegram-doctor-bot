@@ -167,8 +167,12 @@ async def _auth_uids_for(ids: list[int]) -> dict[int, str]:
                 found[wid] = str(u.id)
                 missing.discard(wid)
         if not users or len(users) < _AUTH_PAGE_SIZE:
+            missing = set()  # просмотрели всех пользователей: входа у них просто нет
             break
         page += 1
+    if missing:
+        # Не успели просмотреть весь список — нельзя утверждать, что вход удалён
+        raise RuntimeError("auth user scan limit reached")
     return found
 
 

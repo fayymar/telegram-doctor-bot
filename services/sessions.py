@@ -18,6 +18,7 @@ logger = setup_logger(__name__)
 # Для бессрочных токенов (старые токены метрик) запись об отзыве храним год
 _NO_EXP_KEEP = 365 * 24 * 3600
 REVOCATION_REFRESH_INTERVAL = 600
+REVOCATION_RETRY_INTERVAL = 30  # пока список не загружен — пробуем чаще
 
 
 def _iso(ts: float) -> str:
@@ -64,6 +65,7 @@ async def load_revocations() -> None:
     for row in tokens.data or []:
         exp = datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00")).timestamp()
         revocation.remember_revoked_token(row["jti"], exp)
+    revocation.mark_loaded()
 
 
 async def revocation_sync_loop() -> None:
@@ -78,4 +80,4 @@ async def revocation_sync_loop() -> None:
             )
         except Exception as e:
             logger.error(f"Token revocation sync failed: {type(e).__name__}")
-        await asyncio.sleep(REVOCATION_REFRESH_INTERVAL)
+        await asyncio.sleep(REVOCATION_REFRESH_INTERVAL if revocation.is_loaded() else REVOCATION_RETRY_INTERVAL)

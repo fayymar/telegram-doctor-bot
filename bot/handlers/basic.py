@@ -258,7 +258,7 @@ async def cmd_delete_data(message: Message):
         "• Лекарства и дневник здоровья\n"
         "• Показатели здоровья\n"
         "• Согласие на обработку данных\n\n"
-        "Если Telegram привязан к аккаунту на сайте, данные удалятся и там.\n"
+        "Если Telegram привязан к аккаунту на сайте, данные и вход на сайт удалятся тоже.\n"
         "Это действие необратимо.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="✅ Да, удалить все данные", callback_data="confirm_delete"),
