@@ -320,3 +320,19 @@ def test_account_delete_drops_live_consultation_sessions(monkeypatch):
         assert r.status == 200
     run(t)
     assert "mine" not in main.consultation_sessions and "other" in main.consultation_sessions
+
+
+def test_guest_consultation_stops_if_consent_not_saved(monkeypatch):
+    async def failing_record(*a, **kw):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(main, "record_consent", failing_record)
+
+    def must_not_call(*a, **kw):
+        raise AssertionError("AI must not be called without a saved consent")
+    monkeypatch.setattr(main, "check_red_flags", must_not_call)
+
+    async def t(c):
+        r = await c.post("/api/consultation/start",
+                         json={"symptoms": "болит голова", "consent_version": main.CONSENT_VERSION})
+        assert r.status == 503
+    run(t)

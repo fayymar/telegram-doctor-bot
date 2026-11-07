@@ -326,6 +326,17 @@ async def api_consultation_start(request: web.Request) -> web.Response:
     else:
         return _consent_required_response()
 
+    session_id = str(uuid.uuid4())
+    # Согласие гостя записываем ДО отправки симптомов в AI: без сохранённой
+    # записи о согласии консультацию не начинаем
+    if guest_consent:
+        source = body.get("consent_source") if body.get("consent_source") in ("web", "miniapp") else "web"
+        try:
+            await record_consent(None, source, session_id=session_id)
+        except Exception as e:
+            logger.error(f"Guest consent save failed: {type(e).__name__}")
+            return json_response({"error": "Service temporarily unavailable"}, status=503)
+
     # Получаем профиль пользователя из Supabase (только если есть user_id)
     user_profile = {}
     patient_history = []
@@ -363,7 +374,6 @@ async def api_consultation_start(request: web.Request) -> web.Response:
             "message": "Похоже, это не описание симптомов. Опишите, что вас беспокоит (например: болит голова, температура, кашель).",
         }, status=422)
 
-    session_id = str(uuid.uuid4())
     # Ограничиваем число сессий в памяти: при переполнении удаляем самые старые
     if len(consultation_sessions) >= _MAX_CONSULTATION_SESSIONS:
         oldest = sorted(consultation_sessions, key=lambda k: consultation_sessions[k].get("_created_at"))
@@ -382,12 +392,6 @@ async def api_consultation_start(request: web.Request) -> web.Response:
         "health_metrics": health_metrics,
         "red_flag": red_flag,
     }
-    if guest_consent:
-        source = body.get("consent_source") if body.get("consent_source") in ("web", "miniapp") else "web"
-        try:
-            await record_consent(None, source, session_id=session_id)
-        except Exception as e:
-            logger.error(f"Guest consent save failed: {type(e).__name__}")
 
     return json_response({
         "session_id": session_id,
