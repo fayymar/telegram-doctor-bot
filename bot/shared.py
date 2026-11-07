@@ -59,6 +59,7 @@ site_code_store = DictStore(
     from_row=_code_from_row,
     owner=lambda e: e.get("telegram_id"),
     keep_seconds=SITE_CODE_TTL,
+    one_per_owner=True,  # действует только последний выданный код
 )
 
 

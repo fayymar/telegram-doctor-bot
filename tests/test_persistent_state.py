@@ -358,3 +358,22 @@ def test_dialogs_saved_again_after_new_consent(db, monkeypatch):
             persistent_state._stores.remove(fsm)
     asyncio.run(go())
     assert [r["data"] for r in db["fsm_states"]] == [{"step": "после согласия"}]
+
+
+def test_rotated_code_does_not_come_back_after_restart(db):
+    # новый код отменяет старый; если удаление старого не дошло до базы,
+    # после перезапуска должен действовать только последний
+    now = datetime.now(timezone.utc)
+    db["site_codes"] = [
+        {"code": "OLDOLD22", "user_id": 80, "data": {}, "created_at": (now - timedelta(seconds=60)).isoformat()},
+        {"code": "NEWNEW33", "user_id": 80, "data": {}, "created_at": (now - timedelta(seconds=10)).isoformat()},
+    ]
+
+    async def go():
+        await shared.site_code_store.load()
+        old = await shared.redeem_site_code("OLDOLD22")
+        await persistent_state.wait_all()
+        return old
+    assert asyncio.run(go()) is None
+    assert set(shared.site_codes) == {"NEWNEW33"}
+    assert [r["code"] for r in db["site_codes"]] == ["NEWNEW33"]

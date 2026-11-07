@@ -182,6 +182,7 @@ class DictStore:
         time_col: str = "created_at",
         keep_seconds: int = KEEP_SECONDS,
         max_items: int | None = None,
+        one_per_owner: bool = False,
     ):
         self.items = items
         self.table = table
@@ -189,6 +190,9 @@ class DictStore:
         self.time_col = time_col
         self.keep_seconds = keep_seconds
         self.max_items = max_items
+        # у владельца может быть только одна запись (новый код входа отменяет
+        # старый): при загрузке остаётся самая новая, остальные удаляются
+        self.one_per_owner = one_per_owner
         self._to_row = to_row
         self._from_row = from_row
         self._owner = owner
@@ -208,13 +212,28 @@ class DictStore:
     async def load(self) -> int:
         since = _now() - timedelta(seconds=self.keep_seconds)
         rows = await _load_rows(self.table, self.id_col, since, self.time_col)
+        rows = sorted(rows, key=lambda r: str(r.get(self.time_col) or ""))  # старые — первыми
+        stale: list[str] = []
+        if self.one_per_owner:
+            newest: dict = {}
+            for row in rows:
+                rid, item = self._from_row(row)
+                owner = self._owner(item)
+                if owner in newest:
+                    stale.append(newest[owner][0])
+                newest[owner] = (rid, row)
+            rows = [row for _, row in newest.values()]
         if self.max_items is not None and len(rows) > self.max_items:
             # как и в памяти: при переполнении остаются самые свежие
-            rows = sorted(rows, key=lambda r: str(r.get(self.time_col) or ""))[-self.max_items:]
+            rows = rows[-self.max_items:]
         for row in rows:
             rid, item = self._from_row(row)
             self.items.setdefault(rid, item)
             self._writer.persisted.add(rid)
+        for rid in stale:
+            # записи нет в памяти — фоновая запись удалит её из базы
+            self._writer.persisted.add(rid)
+            self.save(rid)
         return len(rows)
 
     async def purge_old(self) -> None:
