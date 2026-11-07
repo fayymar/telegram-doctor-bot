@@ -1356,6 +1356,33 @@ async def cleanup_stale_sessions():
             logger.info(f"Cleaned up {len(stale)} stale consultation sessions")
 
 
+SUPABASE_KEEPALIVE_INTERVAL = 12 * 3600  # 12 часов
+
+
+async def _ping_database() -> bool:
+    """Лёгкий запрос к базе. Возвращает True, если Supabase ответил."""
+    try:
+        await run_query(lambda: supabase_client.table("user_profiles").select("user_id").limit(1).execute())
+        return True
+    except Exception as e:
+        # Пишем только тип ошибки: в тексте исключения может быть адрес базы
+        logger.warning(f"Supabase keepalive ping failed: {type(e).__name__}")
+        return False
+
+
+async def supabase_keepalive():
+    """
+    Бесплатный Supabase ставит проект на паузу после 7 дней без обращений к
+    базе. UptimeRobot будит только Render (/health в базу не ходит), поэтому
+    раз в 12 часов делаем маленький запрос — это считается активностью.
+    """
+    await asyncio.sleep(60)  # даём сервису спокойно стартовать
+    while True:
+        if await _ping_database():
+            logger.info("Supabase keepalive: ok")
+        await asyncio.sleep(SUPABASE_KEEPALIVE_INTERVAL)
+
+
 async def start_bot():
     """Запуск бота с автоматическим перезапуском при ошибках"""
     retry_delay = 5
@@ -1584,11 +1611,12 @@ async def main():
         # остальные немедленно — но результаты нужно проверить явно, иначе
         # критичный сбой (например, падение polling бота) останется незамеченным
         # и процесс продолжит "жить" в полумёртвом состоянии.
-        task_names = ("web_server", "bot", "cleanup_stale_sessions")
+        task_names = ("web_server", "bot", "cleanup_stale_sessions", "supabase_keepalive")
         results = await asyncio.gather(
             start_web_server(),
             start_bot(),
             cleanup_stale_sessions(),
+            supabase_keepalive(),
             return_exceptions=True
         )
         for name, result in zip(task_names, results):
