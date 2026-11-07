@@ -290,3 +290,17 @@ def test_account_delete_uses_token_user(monkeypatch):
         r = await c.delete("/api/account", headers={"Authorization": f"Bearer {issue_token(100)}"})
         assert r.status == 200 and deleted == [100]
     run(t)
+
+
+def test_consultation_stops_after_consent_withdrawn(monkeypatch):
+    # согласие было при старте, затем пользователь удалил данные посреди консультации
+    _no_consent(monkeypatch)
+    main.consultation_sessions["s3"] = {"user_id": 100, "questions": [], "answers": [],
+                                        "symptoms": "x", "duration": None}
+
+    async def t(c):
+        auth = {"Authorization": f"Bearer {issue_token(100)}"}
+        for path in ("/api/consultation/answer", "/api/consultation/duration", "/api/consultation/result"):
+            r = await c.post(path, json={"session_id": "s3", "answers": [], "duration": "1 день"}, headers=auth)
+            assert r.status == 403, path
+    run(t)

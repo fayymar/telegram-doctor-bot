@@ -213,6 +213,16 @@ def auth_required(handler):
     return wrapper
 
 
+async def _consent_withdrawn(session: dict) -> bool:
+    """
+    Согласие вошедшего пользователя проверено при старте консультации. Если он
+    отозвал его (удалил данные) посреди консультации — не продолжаем обработку
+    и не сохраняем результат.
+    """
+    user_id = session.get("user_id")
+    return bool(user_id) and not await has_consent(user_id)
+
+
 def _consent_required_response() -> web.Response:
     return json_response({"error": "consent_required", "consent_version": CONSENT_VERSION}, status=403)
 
@@ -417,6 +427,8 @@ async def api_consultation_answer(request: web.Request) -> web.Response:
     session = _get_owned_session(request, session_id)
     if not session:
         return json_response({"error": "Session not found"}, status=404)
+    if await _consent_withdrawn(session):
+        return _consent_required_response()
 
     try:
         answers = body.get("answers", [])
@@ -456,6 +468,8 @@ async def api_consultation_duration(request: web.Request) -> web.Response:
     session = _get_owned_session(request, session_id)
     if not session:
         return json_response({"error": "Session not found"}, status=404)
+    if await _consent_withdrawn(session):
+        return _consent_required_response()
     if _is_rate_limited(request, "ai", limit=10, window=60):
         return _rate_limit_response()
 
@@ -492,6 +506,8 @@ async def api_consultation_result(request: web.Request) -> web.Response:
     session = _get_owned_session(request, session_id)
     if not session:
         return json_response({"error": "Session not found"}, status=404)
+    if await _consent_withdrawn(session):
+        return _consent_required_response()
     if _is_rate_limited(request, "ai", limit=10, window=60):
         return _rate_limit_response()
 
