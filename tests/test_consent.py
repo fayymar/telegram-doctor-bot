@@ -306,3 +306,23 @@ def test_failed_purge_keeps_supabase_login(monkeypatch):
     with pytest.raises(RuntimeError):
         asyncio.run(consent.delete_all_user_data(web_id))
     assert deleted_auth == []
+
+
+def test_auth_lookup_failure_deletes_nothing(monkeypatch):
+    # не удалось найти вход Supabase — ничего не удаляем и не отзываем,
+    # иначе потеряем auth_uid из профиля, а вход останется
+    import pytest
+    from services import sessions
+    deleted = _fake_db(monkeypatch, [{"user_id": 5}])
+    revoked = []
+
+    async def fake_revoke(ids):
+        revoked.extend(ids)
+    monkeypatch.setattr(sessions, "revoke_all_tokens", fake_revoke)
+
+    async def failing_lookup(ids):
+        raise RuntimeError("auth down")
+    monkeypatch.setattr(consent, "_auth_uids_for", failing_lookup)
+    with pytest.raises(RuntimeError):
+        asyncio.run(consent.delete_all_user_data(5))
+    assert deleted == [] and _fake_db.updated == [] and revoked == []
