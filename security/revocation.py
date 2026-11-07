@@ -23,10 +23,12 @@ _started_ms = int(time.time() * 1000)
 
 def token_issued_ms(payload: dict) -> int:
     """Момент выдачи токена в мс. У старых токенов есть только iat (сек) —
-    считаем их выданными в конце этой секунды (строже, а не мягче)."""
+    считаем их выданными в начале этой секунды: так токен, выданный в ту же
+    секунду, что и «выйти везде», точно попадает под отзыв. Новые токены
+    всегда несут iatm, поэтому лишнего это не отзывает."""
     if isinstance(payload.get("iatm"), int):
         return payload["iatm"]
-    return int(payload.get("iat", 0)) * 1000 + 999
+    return int(payload.get("iat", 0)) * 1000
 
 
 def is_revoked(uid: int, payload: dict) -> bool:

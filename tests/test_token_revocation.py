@@ -273,3 +273,14 @@ def test_revoked_non_expiring_token_stays_revoked(monkeypatch):
     monkeypatch.setattr(time, "time", lambda: 200 * 365 * 24 * 3600 + 1_700_000_000)
     revocation.purge_expired()
     assert verify_token(tok, (SCOPE_METRICS,)) is None
+
+
+def test_legacy_token_issued_same_second_as_cutoff_is_revoked():
+    # старый токен (только iat) выдан в ту же секунду, что и «выйти везде», но раньше
+    import json, time
+    from security import auth
+    now_s = int(time.time())
+    body = auth._b64e(json.dumps({"uid": 11, "scp": "session", "iat": now_s}).encode())
+    legacy = f"{body}.{auth._sign(body.encode())}"
+    revocation.remember_cutoff(11, now_s * 1000 + 500)
+    assert verify_token(legacy) is None
