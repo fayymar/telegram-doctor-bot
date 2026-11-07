@@ -15,6 +15,7 @@ from api.common import (
     _token_user_id,
     auth_required,
     consultation_sessions,
+    consultation_store,
     json_response,
 )
 from database.connection import run_query, supabase_client
@@ -118,6 +119,7 @@ async def api_consultation_start(request: web.Request) -> web.Response:
         oldest = sorted(consultation_sessions, key=lambda k: consultation_sessions[k].get("_created_at"))
         for sid in oldest[: len(consultation_sessions) - _MAX_CONSULTATION_SESSIONS + 1]:
             consultation_sessions.pop(sid, None)
+            consultation_store.save(sid)
     consultation_sessions[session_id] = {
         "_created_at": datetime.now(timezone.utc),
         "user_id": user_id,
@@ -131,6 +133,7 @@ async def api_consultation_start(request: web.Request) -> web.Response:
         "health_metrics": health_metrics,
         "red_flag": red_flag,
     }
+    consultation_store.save(session_id)
 
     return json_response({
         "session_id": session_id,
@@ -172,6 +175,7 @@ async def api_consultation_answer(request: web.Request) -> web.Response:
             q_text = questions[i]["question"] if i < len(questions) else ""
             paired.append({"question": q_text, "answer": str(ans)[:500]})
         session["answers"] = paired
+        consultation_store.save(session_id)
 
         return json_response({"next_step": "duration"})
     except Exception as e:
@@ -202,10 +206,12 @@ async def api_consultation_duration(request: web.Request) -> web.Response:
 
     try:
         session["duration"] = duration
+        consultation_store.save(session_id)
 
         # Генерация анамнестических вопросов
         anamnesis_questions = await get_anamnesis_questions(session["symptoms"])
         session["anamnesis_questions"] = anamnesis_questions
+        consultation_store.save(session_id)
 
         # Нормализуем ключ: question → text для Mini App
         normalized = [
@@ -255,6 +261,7 @@ async def api_consultation_result(request: web.Request) -> web.Response:
         else:
             anamnesis_answers = raw_anamnesis
         session["anamnesis_answers"] = anamnesis_answers
+        consultation_store.save(session_id)
 
         all_data = {
             "symptoms": session["symptoms"],
@@ -301,6 +308,7 @@ async def api_consultation_result(request: web.Request) -> web.Response:
 
         # Clean up session from memory after successful result
         consultation_sessions.pop(session_id, None)
+        consultation_store.save(session_id)
         logger.info(f"Session {session_id} cleaned up after result")
 
         return json_response({

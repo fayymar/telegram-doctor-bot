@@ -9,7 +9,6 @@ from api.common import (
     _unauthorized,
     auth_required,
     consent_required,
-    consultation_sessions,
     json_response,
 )
 from bot.instance import bot
@@ -330,10 +329,6 @@ async def api_consent_post(request: web.Request) -> web.Response:
 async def api_account_delete(request: web.Request) -> web.Response:
     """DELETE /api/account — удаляет все данные пользователя и отзывает согласие."""
     user_id = request["user_id"]
-    # Незавершённые консультации в памяти тоже содержат данные о здоровье
-    for sid, session in list(consultation_sessions.items()):
-        if session.get("user_id") == user_id:
-            consultation_sessions.pop(sid, None)
     try:
         await delete_all_user_data(user_id)
     except Exception as e:

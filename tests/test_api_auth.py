@@ -308,20 +308,6 @@ def test_consultation_stops_after_consent_withdrawn(monkeypatch):
     run(t)
 
 
-def test_account_delete_drops_live_consultation_sessions(monkeypatch):
-    async def fake_delete(user_id, include_linked=True):
-        return None
-    patch_api(monkeypatch, "delete_all_user_data", fake_delete)
-    main.consultation_sessions["mine"] = {"user_id": 100, "questions": [], "answers": []}
-    main.consultation_sessions["other"] = {"user_id": 200, "questions": [], "answers": []}
-
-    async def t(c):
-        r = await c.delete("/api/account", headers={"Authorization": f"Bearer {issue_token(100)}"})
-        assert r.status == 200
-    run(t)
-    assert "mine" not in main.consultation_sessions and "other" in main.consultation_sessions
-
-
 def test_guest_consultation_stops_if_consent_not_saved(monkeypatch):
     async def failing_record(*a, **kw):
         raise RuntimeError("db down")

@@ -95,7 +95,12 @@ async def record_consent(user_id: int | None, source: str, session_id: str | Non
 
 # Таблицы с данными пользователя. consents — первой: с этого момента проверки согласия сразу отказывают;
 # user_profiles — последней (на неё ссылаются FK).
-_USER_TABLES = ("consents", "messages", "consultations", "medications", "health_diary", "health_metrics", "user_profiles")
+_USER_TABLES = (
+    "consents", "messages", "consultations", "medications", "health_diary", "health_metrics",
+    # незавершённые диалоги (services/persistent_state.py)
+    "consultation_sessions", "fsm_states", "site_codes",
+    "user_profiles",  # последним: хранит auth_uid, см. delete_all_user_data
+)
 
 
 # Поиск входа Supabase Auth перебором списка пользователей (для аккаунтов,
@@ -171,6 +176,14 @@ async def delete_all_user_data(user_id: int) -> None:
     _deletions += 1
     _consent_cache.pop(user_id, None)
     failed = []
+    # Незавершённые консультации и шаги диалогов в памяти тоже содержат данные
+    # о здоровье. Сначала убираем их из памяти и дожидаемся фоновой записи в
+    # базу — иначе она могла бы вернуть строки уже после удаления ниже
+    try:
+        from services.persistent_state import forget_user
+        await forget_user(user_id)
+    except Exception as e:
+        logger.error(f"Forget in-progress state failed for user {user_id}: {type(e).__name__}")
     # Все выданные токены (сайт, Mini App, Shortcut) перестают действовать
     try:
         from services.sessions import revoke_all_tokens
