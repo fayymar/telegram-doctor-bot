@@ -89,3 +89,26 @@ def test_middleware_lets_free_commands_through():
     assert ConsentMiddleware._is_free(msg("/start@medgg_bot login"))
     assert not ConsentMiddleware._is_free(msg("🩺 Новая консультация"))
     assert not ConsentMiddleware._is_free(msg("болит голова"))
+
+
+def test_bot_removed_from_group_does_not_delete_data(monkeypatch):
+    from bot.handlers import basic
+
+    calls = []
+
+    async def fake_delete(user_id, include_linked=True):
+        calls.append((user_id, include_linked))
+    monkeypatch.setattr(consent, "delete_all_user_data", fake_delete)
+
+    def update(chat_type):
+        return SimpleNamespace(
+            chat=SimpleNamespace(type=chat_type),
+            from_user=SimpleNamespace(id=42),
+            new_chat_member=SimpleNamespace(status="kicked"),
+        )
+
+    asyncio.run(basic.on_user_blocked_bot(update("group")))
+    asyncio.run(basic.on_user_blocked_bot(update("supergroup")))
+    assert calls == []
+    asyncio.run(basic.on_user_blocked_bot(update("private")))
+    assert calls == [(42, False)]

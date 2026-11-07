@@ -289,7 +289,9 @@ async def cancel_delete(callback: CallbackQuery):
 
 @router.my_chat_member()
 async def on_user_blocked_bot(update: ChatMemberUpdated):
-    if update.new_chat_member.status == "kicked":
+    # Только личный чат: «kicked» в группе означает, что бота убрали из группы, —
+    # это не просьба удалить данные того, кто это сделал
+    if update.chat.type == "private" and update.new_chat_member.status == "kicked":
         from services.consent import delete_all_user_data
         user_id = update.from_user.id
         try:
