@@ -1365,7 +1365,8 @@ async def _ping_database() -> bool:
         await run_query(lambda: supabase_client.table("user_profiles").select("user_id").limit(1).execute())
         return True
     except Exception as e:
-        logger.warning(f"Supabase keepalive ping failed: {e}")
+        # Пишем только тип ошибки: в тексте исключения может быть адрес базы
+        logger.warning(f"Supabase keepalive ping failed: {type(e).__name__}")
         return False
 
 
