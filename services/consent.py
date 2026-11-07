@@ -98,38 +98,6 @@ async def record_consent(user_id: int | None, source: str, session_id: str | Non
 _USER_TABLES = ("consents", "messages", "consultations", "medications", "health_diary", "health_metrics", "user_profiles")
 
 
-async def linked_user_ids(user_id: int) -> list[int]:
-    """
-    Аккаунты, связанные с user_id привязкой сайт <-> Telegram (/api/auth/link).
-    Привязка возможна только кодом, который бот выдаёт владельцу Telegram, поэтому
-    оба аккаунта принадлежат одному человеку и удаляются вместе.
-    """
-    ids = {user_id}
-    own = await run_query(
-        lambda: supabase_client.table("user_profiles")
-        .select("linked_telegram_id, linked_web_id")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    back = await run_query(
-        lambda: supabase_client.table("user_profiles")
-        .select("user_id")
-        .or_(f"linked_telegram_id.eq.{user_id},linked_web_id.eq.{user_id}")
-        .execute()
-    )
-    for row in own.data or []:
-        for key in ("linked_telegram_id", "linked_web_id"):
-            try:
-                if row.get(key):
-                    ids.add(int(row[key]))
-            except (TypeError, ValueError):
-                pass
-    for row in back.data or []:
-        if row.get("user_id") is not None:
-            ids.add(int(row["user_id"]))
-    return sorted(ids)
-
-
 # Поиск входа Supabase Auth перебором списка пользователей (для аккаунтов,
 # созданных до того, как auth_uid стал сохраняться в профиле)
 _AUTH_PAGE_SIZE = 1000
@@ -176,24 +144,32 @@ async def _auth_uids_for(ids: list[int]) -> dict[int, str]:
     return found
 
 
-async def delete_all_user_data(user_id: int, include_linked: bool = True) -> None:
+async def delete_all_user_data(user_id: int) -> None:
     """
-    Удаляет все данные пользователя во всех таблицах, включая записи о согласии
-    (отзыв согласия). При include_linked — и в привязанном аккаунте (сайт <-> Telegram):
-    так работают «Удалить аккаунт» и /deletedata. Без него удаляется только этот аккаунт
-    (например, когда пользователь просто заблокировал бота).
+    Удаляет все данные аккаунта во всех таблицах, включая записи о согласии
+    (отзыв согласия), отзывает его токены и удаляет вход Supabase Auth
+    (Google/Apple/email). Так работают «Удалить аккаунт», /deletedata и
+    блокировка бота.
+
+    Привязанный аккаунт (сайт <-> Telegram) НЕ удаляется: код привязки
+    подтверждает только владельца Telegram, а не того, кто ввёл его на сайте,
+    поэтому привязка не даёт права удалять другой аккаунт. Связь с ним
+    разрывается, его данные остаются, их удаляют отдельно.
+
     Ошибка в одной таблице не прерывает удаление остальных, но в конце
     пробрасывается, чтобы пользователь узнал о сбое.
     """
+    ids = [user_id]
+    # Вход Supabase Auth ищем ДО удаления: его UUID хранится в профиле. Если найти
+    # не удалось, ничего не удаляем — иначе вход пережил бы удаление без следа.
     try:
-        ids = await linked_user_ids(user_id) if include_linked else [user_id]
+        auth_uids = await _auth_uids_for(ids)
     except Exception as e:
-        logger.error(f"Linked accounts lookup failed for user {user_id}: {type(e).__name__}")
-        raise RuntimeError("failed to resolve linked accounts") from e
+        logger.error(f"Auth user lookup failed for user {user_id}: {type(e).__name__}")
+        raise RuntimeError("failed to resolve auth user") from e
     global _deletions
     _deletions += 1
-    for uid in ids:
-        _consent_cache.pop(uid, None)
+    _consent_cache.pop(user_id, None)
     failed = []
     # Все выданные токены (сайт, Mini App, Shortcut) перестают действовать
     try:
@@ -204,14 +180,6 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
         # о сбое, чтобы пользователь повторил удаление
         logger.error(f"Token revocation persist failed for user {user_id}: {type(e).__name__}")
         failed.append("token_revocation")
-    # Вход через Google/Apple/email (Supabase Auth) тоже удаляем — вместе с email.
-    # UUID ищем до удаления профиля: он хранится там.
-    try:
-        auth_uids = await _auth_uids_for(ids)
-    except Exception as e:
-        logger.error(f"Auth user lookup failed for user {user_id}: {type(e).__name__}")
-        auth_uids = {}
-        failed.append("auth")
     for table in _USER_TABLES:
         try:
             await run_query(lambda t=table: supabase_client.table(t).delete().in_("user_id", ids).execute())
@@ -226,6 +194,16 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
         logger.error(f"Delete user data failed: table=consents (final) user={user_id}: {type(e).__name__}")
         if "consents" not in failed:
             failed.append("consents")
+    # Разрываем привязку в профиле другого аккаунта
+    for column in ("linked_telegram_id", "linked_web_id"):
+        try:
+            await run_query(
+                lambda c=column: supabase_client.table("user_profiles")
+                .update({c: None}).eq(c, str(user_id)).execute()
+            )
+        except Exception as e:
+            logger.error(f"Unlink failed: column={column} user={user_id}: {type(e).__name__}")
+            failed.append("unlink")
     # Вход Supabase удаляем, только если все данные действительно стёрты: иначе
     # человек потерял бы единственный способ войти и удалить оставшееся (новый вход
     # через Google/email — это новый аккаунт с другим номером)
@@ -240,8 +218,7 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
     # Повторно: параллельная проверка has_consent могла снова закэшировать
     # согласие, пока строки ещё не были удалены
     _deletions += 1
-    for uid in ids:
-        _consent_cache.pop(uid, None)
+    _consent_cache.pop(user_id, None)
     if failed:
         raise RuntimeError(f"failed to delete from: {', '.join(failed)}")
-    logger.info(f"All data deleted for user {user_id} (accounts: {len(ids)}) at {int(time.time())}")
+    logger.info(f"All data deleted for user {user_id} at {int(time.time())}")

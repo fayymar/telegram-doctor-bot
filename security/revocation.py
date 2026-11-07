@@ -43,6 +43,11 @@ def remember_revoked_token(jti: str, expires_at: float) -> None:
     _revoked_jti[jti] = expires_at
 
 
+def current_cutoff(user_id: int) -> int:
+    """Наибольший известный процессу момент отзыва (-1, если отзывов не было)."""
+    return _cutoff_ms.get(int(user_id), -1)
+
+
 def remember_cutoff(user_id: int, not_before_ms: int) -> None:
     if not_before_ms > _cutoff_ms.get(user_id, -1):
         _cutoff_ms[user_id] = not_before_ms

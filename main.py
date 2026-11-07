@@ -27,7 +27,7 @@ from bot.handlers import (
 from bot.middlewares import ConsentMiddleware, FSMTimeoutMiddleware
 from config import BOT_TOKEN
 from database.connection import run_query, supabase_client
-from services.consent import CONSENT_VERSION, delete_all_user_data, has_consent, linked_user_ids, record_consent
+from services.consent import CONSENT_VERSION, delete_all_user_data, has_consent, record_consent
 from services.sessions import load_revocations, revoke_all_tokens, revoke_token, revocation_sync_loop
 from services.consultation_agent import (
     check_red_flags,
@@ -1417,14 +1417,8 @@ async def api_auth_logout(request: web.Request) -> web.Response:
 
 @auth_required
 async def api_auth_logout_all(request: web.Request) -> web.Response:
-    """POST /api/auth/logout-all — отзывает все токены пользователя (все устройства),
-    включая привязанный аккаунт (сайт <-> Telegram): это тот же человек."""
-    user_id = request["user_id"]
-    try:
-        ids = await linked_user_ids(user_id)
-    except Exception as e:
-        logger.error(f"Linked accounts lookup failed for user {user_id}: {type(e).__name__}")
-        return json_response({"error": "Service temporarily unavailable"}, status=503)
+    """POST /api/auth/logout-all — отзывает все токены пользователя (все устройства)."""
+    ids = [request["user_id"]]
     try:
         await revoke_all_tokens(ids)
     except Exception as e:

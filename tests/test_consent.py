@@ -7,6 +7,7 @@ from services import consent
 def _fake_db(monkeypatch, profiles):
     """Минимальная подмена Supabase: profiles — строки user_profiles для поиска привязок."""
     deleted = []
+    updated = []
 
     class Q:
         def __init__(self, table):
@@ -15,6 +16,10 @@ def _fake_db(monkeypatch, profiles):
             return self
         def delete(self):
             self.op = "delete"
+            return self
+        def update(self, values):
+            self.op = "update"
+            self.values = values
             return self
         def eq(self, col, val):
             self.filters["eq"] = (col, val)
@@ -26,6 +31,9 @@ def _fake_db(monkeypatch, profiles):
             self.filters["or"] = expr
             return self
         def execute(self):
+            if self.op == "update":
+                updated.append((self.table, self.values, self.filters["eq"]))
+                return SimpleNamespace(data=[])
             if self.op == "delete":
                 deleted.append((self.table, self.filters["in"][1]))
                 return SimpleNamespace(data=[])
@@ -41,6 +49,7 @@ def _fake_db(monkeypatch, profiles):
     async def fake_run_query(func, *a, **kw):
         return func()
     monkeypatch.setattr(consent, "run_query", fake_run_query)
+    _fake_db.updated = updated
     return deleted
 
 
@@ -57,23 +66,19 @@ def test_delete_all_user_data_covers_every_table(monkeypatch):
     assert 5 not in consent._consent_cache
 
 
-def test_delete_all_user_data_includes_linked_accounts(monkeypatch):
-    # веб-аккаунт 900 привязан к Telegram 7; посторонний 8 не затрагивается
+def test_delete_does_not_touch_linked_account(monkeypatch):
+    # веб-аккаунт 900 привязан к Telegram 7: удаление 7 стирает только 7 и разрывает
+    # привязку у 900 (код привязки не доказывает, что это один человек)
     profiles = [
         {"user_id": 900, "linked_telegram_id": "7"},
         {"user_id": 7, "linked_web_id": "900"},
-        {"user_id": 8},
     ]
-    for start in (900, 7):  # и с сайта, и из бота
-        deleted = _fake_db(monkeypatch, profiles)
-        asyncio.run(consent.delete_all_user_data(start))
-        assert all(ids == [7, 900] for _, ids in deleted), deleted
-
-
-def test_blocking_bot_deletes_only_telegram_account(monkeypatch):
-    deleted = _fake_db(monkeypatch, [{"user_id": 7, "linked_web_id": "900"}, {"user_id": 900, "linked_telegram_id": "7"}])
-    asyncio.run(consent.delete_all_user_data(7, include_linked=False))
-    assert all(ids == [7] for _, ids in deleted)
+    deleted = _fake_db(monkeypatch, profiles)
+    asyncio.run(consent.delete_all_user_data(7))
+    assert all(ids == [7] for _, ids in deleted), deleted
+    unlinked = {(vals and list(vals)[0], eq) for _, vals, eq in _fake_db.updated}
+    assert ("linked_telegram_id", ("linked_telegram_id", "7")) in unlinked
+    assert ("linked_web_id", ("linked_web_id", "7")) in unlinked
 
 
 def test_middleware_lets_free_commands_through():
@@ -98,8 +103,8 @@ def test_bot_removed_from_group_does_not_delete_data(monkeypatch):
 
     calls = []
 
-    async def fake_delete(user_id, include_linked=True):
-        calls.append((user_id, include_linked))
+    async def fake_delete(user_id):
+        calls.append(user_id)
     monkeypatch.setattr(consent, "delete_all_user_data", fake_delete)
 
     def update(chat_type):
@@ -113,7 +118,7 @@ def test_bot_removed_from_group_does_not_delete_data(monkeypatch):
     asyncio.run(basic.on_user_blocked_bot(update("supergroup")))
     assert calls == []
     asyncio.run(basic.on_user_blocked_bot(update("private")))
-    assert calls == [(42, False)]
+    assert calls == [42]
 
 
 def test_record_consent_is_idempotent_per_version(monkeypatch):
@@ -206,6 +211,9 @@ def _fake_db_with_auth(monkeypatch, profiles, auth_users):
         def delete(self):
             self.op = "delete"
             return self
+        def update(self, values):
+            self.op = "update"
+            return self
         def eq(self, col, val):
             self.f["eq"] = val
             return self
@@ -216,7 +224,7 @@ def _fake_db_with_auth(monkeypatch, profiles, auth_users):
             self.f["or"] = expr
             return self
         def execute(self):
-            if self.op == "delete":
+            if self.op in ("delete", "update"):
                 return SimpleNamespace(data=[])
             if "in" in self.f:
                 return SimpleNamespace(data=[p for p in profiles if p["user_id"] in self.f["in"]])

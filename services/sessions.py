@@ -72,7 +72,8 @@ async def _flush_pending_locked() -> None:
             _pending_tokens.pop(j, None)
     if _pending_cutoffs:
         batch = dict(_pending_cutoffs)
-        rows = [{"user_id": u, "not_before_ms": c} for u, c in batch.items()]
+        # в базу никогда не пишем меньше, чем уже известно процессу
+        rows = [{"user_id": u, "not_before_ms": max(c, revocation.current_cutoff(u))} for u, c in batch.items()]
         await run_query(lambda: supabase_client.table("token_cutoffs").upsert(rows, on_conflict="user_id").execute())
         for u, c in batch.items():
             if _pending_cutoffs.get(u) == c:

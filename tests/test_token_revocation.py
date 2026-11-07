@@ -64,14 +64,6 @@ def test_revocations_survive_restart(monkeypatch):
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def _no_linked_accounts(monkeypatch):
-    """По умолчанию у пользователя нет привязанного аккаунта (без обращения к базе)."""
-    async def only_self(uid):
-        return [uid]
-    monkeypatch.setattr(main, "linked_user_ids", only_self)
-
-
 def _app():
     app = web.Application()
     app.router.add_post("/api/auth/logout", main.api_auth_logout)
@@ -180,23 +172,6 @@ def test_logout_all_reports_failure(monkeypatch):
         assert r.status == 503
         r = await c.get("/api/auth/me", headers={"Authorization": f"Bearer {t1}"})
         assert r.status == 401  # на этом сервере токен уже не действует
-    _run(t)
-
-
-def test_logout_all_covers_linked_account(monkeypatch):
-    import main as m
-
-    async def linked(uid):
-        return sorted({uid, 900})
-    monkeypatch.setattr(m, "linked_user_ids", linked)
-    web_tok, tg_tok = issue_token(900), issue_token(7)
-
-    async def t(c):
-        r = await c.post("/api/auth/logout-all", headers={"Authorization": f"Bearer {tg_tok}"})
-        assert r.status == 200
-        for tok in (web_tok, tg_tok):
-            r = await c.get("/api/auth/me", headers={"Authorization": f"Bearer {tok}"})
-            assert r.status == 401
     _run(t)
 
 
