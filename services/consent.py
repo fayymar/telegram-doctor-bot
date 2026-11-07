@@ -85,20 +85,61 @@ async def record_consent(user_id: int | None, source: str, session_id: str | Non
 _USER_TABLES = ("messages", "consultations", "medications", "health_diary", "health_metrics", "consents", "user_profiles")
 
 
-async def delete_all_user_data(user_id: int) -> None:
+async def _linked_user_ids(user_id: int) -> list[int]:
+    """
+    Аккаунты, связанные с user_id привязкой сайт <-> Telegram (/api/auth/link).
+    Привязка возможна только кодом, который бот выдаёт владельцу Telegram, поэтому
+    оба аккаунта принадлежат одному человеку и удаляются вместе.
+    """
+    ids = {user_id}
+    own = await run_query(
+        lambda: supabase_client.table("user_profiles")
+        .select("linked_telegram_id, linked_web_id")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    back = await run_query(
+        lambda: supabase_client.table("user_profiles")
+        .select("user_id")
+        .or_(f"linked_telegram_id.eq.{user_id},linked_web_id.eq.{user_id}")
+        .execute()
+    )
+    for row in own.data or []:
+        for key in ("linked_telegram_id", "linked_web_id"):
+            try:
+                if row.get(key):
+                    ids.add(int(row[key]))
+            except (TypeError, ValueError):
+                pass
+    for row in back.data or []:
+        if row.get("user_id") is not None:
+            ids.add(int(row["user_id"]))
+    return sorted(ids)
+
+
+async def delete_all_user_data(user_id: int, include_linked: bool = True) -> None:
     """
     Удаляет все данные пользователя во всех таблицах, включая записи о согласии
-    (отзыв согласия). Ошибка в одной таблице не прерывает удаление остальных,
-    но в конце пробрасывается, чтобы пользователь узнал о сбое.
+    (отзыв согласия). При include_linked — и в привязанном аккаунте (сайт <-> Telegram):
+    так работают «Удалить аккаунт» и /deletedata. Без него удаляется только этот аккаунт
+    (например, когда пользователь просто заблокировал бота).
+    Ошибка в одной таблице не прерывает удаление остальных, но в конце
+    пробрасывается, чтобы пользователь узнал о сбое.
     """
-    _consent_cache.pop(user_id, None)
+    try:
+        ids = await _linked_user_ids(user_id) if include_linked else [user_id]
+    except Exception as e:
+        logger.error(f"Linked accounts lookup failed for user {user_id}: {type(e).__name__}")
+        raise RuntimeError("failed to resolve linked accounts") from e
+    for uid in ids:
+        _consent_cache.pop(uid, None)
     failed = []
     for table in _USER_TABLES:
         try:
-            await run_query(lambda t=table: supabase_client.table(t).delete().eq("user_id", user_id).execute())
+            await run_query(lambda t=table: supabase_client.table(t).delete().in_("user_id", ids).execute())
         except Exception as e:
             logger.error(f"Delete user data failed: table={table} user={user_id}: {type(e).__name__}")
             failed.append(table)
     if failed:
         raise RuntimeError(f"failed to delete from: {', '.join(failed)}")
-    logger.info(f"All data deleted for user {user_id} at {int(time.time())}")
+    logger.info(f"All data deleted for user {user_id} (accounts: {len(ids)}) at {int(time.time())}")

@@ -258,6 +258,7 @@ async def cmd_delete_data(message: Message):
         "• Лекарства и дневник здоровья\n"
         "• Показатели здоровья\n"
         "• Согласие на обработку данных\n\n"
+        "Если Telegram привязан к аккаунту на сайте, данные удалятся и там.\n"
         "Это действие необратимо.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="✅ Да, удалить все данные", callback_data="confirm_delete"),
@@ -292,7 +293,8 @@ async def on_user_blocked_bot(update: ChatMemberUpdated):
         from services.consent import delete_all_user_data
         user_id = update.from_user.id
         try:
-            await delete_all_user_data(user_id)
+            # Блокировка бота — не просьба удалить аккаунт на сайте: удаляем только Telegram-аккаунт
+            await delete_all_user_data(user_id, include_linked=False)
             logger.info(f"Deleted all data for user {user_id} (bot blocked)")
         except Exception as e:
             logger.error(f"Error deleting user data for {user_id}: {type(e).__name__}")
