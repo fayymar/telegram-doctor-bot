@@ -121,6 +121,21 @@ async def _load_rows(table: str, id_col: str, since: datetime, time_col: str) ->
         start += len(data)
 
 
+async def _consented_users(user_ids) -> set[int]:
+    """Кто из пользователей сейчас дал согласие (текущая версия текста)."""
+    from services.consent import CONSENT_VERSION
+    ids = sorted({int(u) for u in user_ids if u is not None})
+    found: set[int] = set()
+    for i in range(0, len(ids), 200):
+        chunk = ids[i:i + 200]
+        resp = await run_query(
+            lambda c=chunk: supabase_client.table("consents").select("user_id")
+            .in_("user_id", c).eq("version", CONSENT_VERSION).execute()
+        )
+        found.update(int(r["user_id"]) for r in (resp.data or []) if r.get("user_id") is not None)
+    return found
+
+
 class _Writer:
     """
     Пишет в базу текущее состояние записи. Для каждой записи одновременно идёт
@@ -207,6 +222,7 @@ class DictStore:
         keep_seconds: int = KEEP_SECONDS,
         max_items: int | None = None,
         one_per_owner: bool = False,
+        require_consent: bool = False,
     ):
         self.items = items
         self.table = table
@@ -217,6 +233,10 @@ class DictStore:
         # у владельца может быть только одна запись (новый код входа отменяет
         # старый): при загрузке остаётся самая новая, остальные удаляются
         self.one_per_owner = one_per_owner
+        # восстанавливать только записи пользователей с действующим согласием:
+        # строка, попавшая в базу уже после удаления аккаунта (например, другим
+        # процессом во время выкладки), не вернётся, а удалится
+        self.require_consent = require_consent
         self._to_row = to_row
         self._from_row = from_row
         self._owner = owner
@@ -250,6 +270,15 @@ class DictStore:
         if self.max_items is not None and len(rows) > self.max_items:
             # как и в памяти: при переполнении остаются самые свежие
             rows = rows[-self.max_items:]
+        if self.require_consent:
+            parsed = [(row, *self._from_row(row)) for row in rows]
+            allowed = await _consented_users(self._owner(item) for _, _, item in parsed)
+            rows = []
+            for row, rid, item in parsed:
+                if self._owner(item) in allowed:
+                    rows.append(row)
+                else:
+                    stale.append(rid)
         for row in rows:
             rid, item = self._from_row(row)
             self.items.setdefault(rid, item)
@@ -348,6 +377,14 @@ class PersistentMemoryStorage(MemoryStorage):
         rows = await _load_rows(self.table, "key", since, "updated_at")
         if len(rows) > _MAX_RESTORED_FSM_STATES:
             rows = sorted(rows, key=lambda r: str(r.get("updated_at") or ""))[-_MAX_RESTORED_FSM_STATES:]
+        # только пользователи с действующим согласием (см. DictStore.require_consent);
+        # без согласия в шаге диалога нет данных о здоровье — человек начнёт заново
+        allowed = await _consented_users(row.get("user_id") for row in rows)
+        dropped = [row["key"] for row in rows if row.get("user_id") not in allowed and row.get("key")]
+        rows = [row for row in rows if row.get("user_id") in allowed]
+        for skey in dropped:
+            self._writer.persisted.add(skey)
+            self._writer.schedule(skey)  # записи нет в памяти — удалится из базы
         for row in rows:
             try:
                 key = _str_to_key(row["key"])

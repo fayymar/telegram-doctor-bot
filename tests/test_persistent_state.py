@@ -32,6 +32,10 @@ class _FakeTable:
         self.filters.append((col, "=", val))
         return self
 
+    def in_(self, col, vals):
+        self.filters.append((col, "in", [str(v) for v in vals]))
+        return self
+
     def order(self, *a):
         return self
 
@@ -56,6 +60,8 @@ class _FakeTable:
                 return False
             if op == "<" and not (str(v) < str(val)):
                 return False
+            if op == "in" and str(v) not in val:
+                return False
         return True
 
     def execute(self):
@@ -76,7 +82,10 @@ class _FakeTable:
 
 @pytest.fixture
 def db(monkeypatch):
-    data = {"_writes": []}
+    from services.consent import CONSENT_VERSION
+    # согласие есть у всех тестовых пользователей, кроме 666
+    data = {"_writes": [], "consents": [{"user_id": u, "version": CONSENT_VERSION}
+                                         for u in (1, 5, 7, 42, 55, 77, 78, 80)]}
     monkeypatch.setattr(persistent_state, "supabase_client",
                         SimpleNamespace(table=lambda name: _FakeTable(data, name)))
 
@@ -431,3 +440,32 @@ def test_consent_given_during_deletion_does_not_reenable_saving(db, monkeypatch)
 
     asyncio.run(consent.delete_all_user_data(93))
     assert persistent_state._is_deleted(93)
+
+
+def test_rows_of_users_without_consent_are_not_restored(db):
+    # строка, попавшая в базу после удаления аккаунта (согласия уже нет), при
+    # запуске не восстанавливается и удаляется
+    now = datetime.now(timezone.utc).isoformat()
+    db["consultation_sessions"] = [
+        {"session_id": "ok", "user_id": 42, "data": {}, "created_at": now},
+        {"session_id": "gone", "user_id": 666, "data": {"symptoms": "x"}, "created_at": now},
+    ]
+    db["fsm_states"] = [
+        {"key": '[1, 55, 55, null, null, "default"]', "user_id": 55, "state": "S", "data": {}, "updated_at": now},
+        {"key": '[1, 666, 666, null, null, "default"]', "user_id": 666, "state": "S",
+         "data": {"symptoms": "x"}, "updated_at": now},
+    ]
+
+    async def go():
+        fsm = PersistentMemoryStorage()
+        try:
+            await persistent_state.load_all()
+            await persistent_state.wait_all()
+            return await fsm.get_state(StorageKey(1, 666, 666)), await fsm.get_state(StorageKey(1, 55, 55))
+        finally:
+            persistent_state._stores.remove(fsm)
+    gone_state, ok_state = asyncio.run(go())
+    assert set(consultation_sessions) == {"ok"}
+    assert [r["session_id"] for r in db["consultation_sessions"]] == ["ok"]
+    assert gone_state is None and ok_state == "S"
+    assert [r["user_id"] for r in db["fsm_states"]] == [55]

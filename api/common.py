@@ -71,6 +71,7 @@ consultation_store = DictStore(
     owner=lambda s: s.get("user_id"),
     keep_seconds=CONSULTATION_SESSION_TTL,
     max_items=_MAX_CONSULTATION_SESSIONS,
+    require_consent=True,
 )
 
 
