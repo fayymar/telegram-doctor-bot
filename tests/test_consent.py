@@ -7,6 +7,7 @@ from services import consent
 def _fake_db(monkeypatch, profiles):
     """Минимальная подмена Supabase: profiles — строки user_profiles для поиска привязок."""
     deleted = []
+    updated = []
 
     class Q:
         def __init__(self, table):
@@ -15,6 +16,10 @@ def _fake_db(monkeypatch, profiles):
             return self
         def delete(self):
             self.op = "delete"
+            return self
+        def update(self, values):
+            self.op = "update"
+            self.values = values
             return self
         def eq(self, col, val):
             self.filters["eq"] = (col, val)
@@ -26,6 +31,9 @@ def _fake_db(monkeypatch, profiles):
             self.filters["or"] = expr
             return self
         def execute(self):
+            if self.op == "update":
+                updated.append((self.table, self.values, self.filters["eq"]))
+                return SimpleNamespace(data=[])
             if self.op == "delete":
                 deleted.append((self.table, self.filters["in"][1]))
                 return SimpleNamespace(data=[])
@@ -41,6 +49,7 @@ def _fake_db(monkeypatch, profiles):
     async def fake_run_query(func, *a, **kw):
         return func()
     monkeypatch.setattr(consent, "run_query", fake_run_query)
+    _fake_db.updated = updated
     return deleted
 
 
@@ -57,23 +66,19 @@ def test_delete_all_user_data_covers_every_table(monkeypatch):
     assert 5 not in consent._consent_cache
 
 
-def test_delete_all_user_data_includes_linked_accounts(monkeypatch):
-    # веб-аккаунт 900 привязан к Telegram 7; посторонний 8 не затрагивается
+def test_delete_does_not_touch_linked_account(monkeypatch):
+    # веб-аккаунт 900 привязан к Telegram 7: удаление 7 стирает только 7 и разрывает
+    # привязку у 900 (код привязки не доказывает, что это один человек)
     profiles = [
         {"user_id": 900, "linked_telegram_id": "7"},
         {"user_id": 7, "linked_web_id": "900"},
-        {"user_id": 8},
     ]
-    for start in (900, 7):  # и с сайта, и из бота
-        deleted = _fake_db(monkeypatch, profiles)
-        asyncio.run(consent.delete_all_user_data(start))
-        assert all(ids == [7, 900] for _, ids in deleted), deleted
-
-
-def test_blocking_bot_deletes_only_telegram_account(monkeypatch):
-    deleted = _fake_db(monkeypatch, [{"user_id": 7, "linked_web_id": "900"}, {"user_id": 900, "linked_telegram_id": "7"}])
-    asyncio.run(consent.delete_all_user_data(7, include_linked=False))
-    assert all(ids == [7] for _, ids in deleted)
+    deleted = _fake_db(monkeypatch, profiles)
+    asyncio.run(consent.delete_all_user_data(7))
+    assert all(ids == [7] for _, ids in deleted), deleted
+    unlinked = {(vals and list(vals)[0], eq) for _, vals, eq in _fake_db.updated}
+    assert ("linked_telegram_id", ("linked_telegram_id", "7")) in unlinked
+    assert ("linked_web_id", ("linked_web_id", "7")) in unlinked
 
 
 def test_middleware_lets_free_commands_through():
@@ -98,8 +103,8 @@ def test_bot_removed_from_group_does_not_delete_data(monkeypatch):
 
     calls = []
 
-    async def fake_delete(user_id, include_linked=True):
-        calls.append((user_id, include_linked))
+    async def fake_delete(user_id):
+        calls.append(user_id)
     monkeypatch.setattr(consent, "delete_all_user_data", fake_delete)
 
     def update(chat_type):
@@ -113,7 +118,7 @@ def test_bot_removed_from_group_does_not_delete_data(monkeypatch):
     asyncio.run(basic.on_user_blocked_bot(update("supergroup")))
     assert calls == []
     asyncio.run(basic.on_user_blocked_bot(update("private")))
-    assert calls == [(42, False)]
+    assert calls == [42]
 
 
 def test_record_consent_is_idempotent_per_version(monkeypatch):
@@ -192,3 +197,150 @@ def test_record_consent_during_deletion_does_not_cache(monkeypatch):
     consent._consent_cache.pop(8, None)
     asyncio.run(consent.record_consent(8, "web"))
     assert 8 not in consent._consent_cache
+
+
+def _fake_db_with_auth(monkeypatch, profiles, auth_users):
+    """Supabase с профилями и списком пользователей Auth; собирает удалённые входы."""
+    deleted_auth = []
+
+    class Q:
+        def __init__(self, table):
+            self.table, self.op, self.f = table, "select", {}
+        def select(self, *a):
+            return self
+        def delete(self):
+            self.op = "delete"
+            return self
+        def update(self, values):
+            self.op = "update"
+            return self
+        def eq(self, col, val):
+            self.f["eq"] = val
+            return self
+        def in_(self, col, vals):
+            self.f["in"] = list(vals)
+            return self
+        def or_(self, expr):
+            self.f["or"] = expr
+            return self
+        def execute(self):
+            if self.op in ("delete", "update"):
+                return SimpleNamespace(data=[])
+            if "in" in self.f:
+                return SimpleNamespace(data=[p for p in profiles if p["user_id"] in self.f["in"]])
+            if "eq" in self.f:
+                return SimpleNamespace(data=[p for p in profiles if p["user_id"] == self.f["eq"]])
+            return SimpleNamespace(data=[])
+
+    admin = SimpleNamespace(
+        list_users=lambda page=None, per_page=None: [SimpleNamespace(id=u) for u in auth_users] if page == 1 else [],
+        delete_user=lambda uid: deleted_auth.append(uid),
+    )
+    monkeypatch.setattr(consent, "supabase_client",
+                        SimpleNamespace(table=lambda t: Q(t), auth=SimpleNamespace(admin=admin)))
+
+    async def fake_run_query(func, *a, **kw):
+        return func(*a, **kw)
+    monkeypatch.setattr(consent, "run_query", fake_run_query)
+    return deleted_auth
+
+
+def test_delete_removes_supabase_login_by_stored_uid(monkeypatch):
+    from security.auth import derive_web_user_id
+    uid = "11111111-2222-3333-4444-555555555555"
+    web_id = derive_web_user_id(uid)
+    deleted_auth = _fake_db_with_auth(monkeypatch, [{"user_id": web_id, "auth_uid": uid}], auth_users=[])
+    asyncio.run(consent.delete_all_user_data(web_id))
+    assert deleted_auth == [uid]
+
+
+def test_delete_finds_supabase_login_without_stored_uid(monkeypatch):
+    from security.auth import derive_web_user_id
+    uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    other = "99999999-8888-7777-6666-555555555555"
+    web_id = derive_web_user_id(uid)
+    deleted_auth = _fake_db_with_auth(monkeypatch, [{"user_id": web_id}], auth_users=[other, uid])
+    asyncio.run(consent.delete_all_user_data(web_id))
+    assert deleted_auth == [uid]  # чужой вход не тронут
+
+
+def test_forged_auth_uid_is_ignored(monkeypatch):
+    # в профиле записан чужой UUID (не соответствующий номеру аккаунта) — его не удаляем
+    from security.auth import derive_web_user_id
+    uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    victim = "99999999-8888-7777-6666-555555555555"
+    web_id = derive_web_user_id(uid)
+    deleted_auth = _fake_db_with_auth(monkeypatch, [{"user_id": web_id, "auth_uid": victim}], auth_users=[uid, victim])
+    asyncio.run(consent.delete_all_user_data(web_id))
+    assert deleted_auth == [uid]
+
+
+def test_telegram_account_has_no_supabase_login(monkeypatch):
+    deleted_auth = _fake_db_with_auth(monkeypatch, [{"user_id": 7}], auth_users=["x"])
+    asyncio.run(consent.delete_all_user_data(7))
+    assert deleted_auth == []
+
+
+def test_failed_purge_keeps_supabase_login(monkeypatch):
+    # если часть данных не удалилась, вход не удаляем — иначе остаток не найти
+    from security.auth import derive_web_user_id
+    uid = "11111111-2222-3333-4444-555555555555"
+    web_id = derive_web_user_id(uid)
+    deleted_auth = _fake_db_with_auth(monkeypatch, [{"user_id": web_id, "auth_uid": uid}], auth_users=[])
+    # заставим удаление из user_profiles упасть
+    orig_table = consent.supabase_client.table
+
+    def table(name):
+        q = orig_table(name)
+        if name == "user_profiles":
+            orig_delete = q.delete
+
+            def delete():
+                orig_delete()
+                q.execute = lambda: (_ for _ in ()).throw(RuntimeError("db"))
+                return q
+            q.delete = delete
+        return q
+    consent.supabase_client.table = table
+    import pytest
+    with pytest.raises(RuntimeError):
+        asyncio.run(consent.delete_all_user_data(web_id))
+    assert deleted_auth == []
+
+
+def test_auth_lookup_failure_deletes_nothing(monkeypatch):
+    # не удалось найти вход Supabase — ничего не удаляем и не отзываем,
+    # иначе потеряем auth_uid из профиля, а вход останется
+    import pytest
+    from services import sessions
+    deleted = _fake_db(monkeypatch, [{"user_id": 5}])
+    revoked = []
+
+    async def fake_revoke(ids):
+        revoked.extend(ids)
+    monkeypatch.setattr(sessions, "revoke_all_tokens", fake_revoke)
+
+    async def failing_lookup(ids):
+        raise RuntimeError("auth down")
+    monkeypatch.setattr(consent, "_auth_uids_for", failing_lookup)
+    with pytest.raises(RuntimeError):
+        asyncio.run(consent.delete_all_user_data(5))
+    assert deleted == [] and _fake_db.updated == [] and revoked == []
+
+
+def test_partial_failure_keeps_profile_with_auth_uid(monkeypatch):
+    # одна таблица не удалилась — профиль (с auth_uid) и вход остаются для повтора
+    import pytest
+    deleted = _fake_db(monkeypatch, [{"user_id": 5}])
+    orig_table = consent.supabase_client.table
+
+    def table(name):
+        q = orig_table(name)
+        if name == "messages":
+            q.execute = lambda: (_ for _ in ()).throw(RuntimeError("db"))
+        return q
+    consent.supabase_client.table = table
+    with pytest.raises(RuntimeError):
+        asyncio.run(consent.delete_all_user_data(5))
+    assert "user_profiles" not in {t for t, _ in deleted}
+    assert "health_diary" in {t for t, _ in deleted}

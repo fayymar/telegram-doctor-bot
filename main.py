@@ -28,6 +28,7 @@ from bot.middlewares import ConsentMiddleware, FSMTimeoutMiddleware
 from config import BOT_TOKEN
 from database.connection import run_query, supabase_client
 from services.consent import CONSENT_VERSION, delete_all_user_data, has_consent, record_consent
+from services.sessions import load_revocations, revoke_all_tokens, revoke_token, revocation_sync_loop
 from services.consultation_agent import (
     check_red_flags,
     get_anamnesis_questions,
@@ -41,6 +42,7 @@ from security.auth import (
     SCOPE_SESSION,
     bearer_token,
     derive_web_user_id,
+    decode_token,
     issue_token,
     verify_login_widget,
     verify_token,
@@ -1303,9 +1305,18 @@ async def api_auth_social(request: web.Request) -> web.Response:
                 lambda: supabase_client.table("user_profiles").insert({
                     "user_id": user_id,
                     "full_name": name or first_name,
+                    "auth_uid": str(sb_user.id),
                 }).execute()
             )
             logger.info(f"Social auth: created user_id={user_id} via {provider}")
+        else:
+            # Аккаунты, созданные до появления auth_uid: дописываем его, чтобы
+            # «Удалить аккаунт» мог удалить и вход Supabase
+            await run_query(
+                lambda: supabase_client.table("user_profiles")
+                    .update({"auth_uid": str(sb_user.id)})
+                    .eq("user_id", user_id).is_("auth_uid", "null").execute()
+            )
     except Exception as e:
         logger.error(f"Social auth error: {e}", exc_info=True)
         return json_response({"error": "Internal server error"}, status=500)
@@ -1388,6 +1399,34 @@ async def api_auth_link(request: web.Request) -> web.Response:
     except Exception as e:
         logger.warning(f"Link notification failed for {tg_id}: {e}")
     return json_response({"linked": True, "telegram_id": tg_id})
+
+
+@auth_required
+async def api_auth_logout(request: web.Request) -> web.Response:
+    """POST /api/auth/logout — отзывает токен этого запроса («Выйти» на этом устройстве)."""
+    payload = decode_token(bearer_token(request.headers) or "")
+    if payload:
+        try:
+            await revoke_token(payload)
+        except Exception as e:
+            # В памяти токен уже отозван; сохранение в базу повторится в фоне
+            logger.error(f"Logout persist failed: {type(e).__name__}")
+            return json_response({"error": "Service temporarily unavailable"}, status=503)
+    return json_response({"ok": True})
+
+
+@auth_required
+async def api_auth_logout_all(request: web.Request) -> web.Response:
+    """POST /api/auth/logout-all — отзывает все токены пользователя (все устройства)."""
+    ids = [request["user_id"]]
+    try:
+        await revoke_all_tokens(ids)
+    except Exception as e:
+        # На этом сервере токены уже не действуют; сохранение в базу повторится в фоне,
+        # но сообщаем об ошибке, чтобы пользователь мог повторить
+        logger.error(f"Logout-all persist failed: {type(e).__name__}")
+        return json_response({"error": "Service temporarily unavailable"}, status=503)
+    return json_response({"ok": True})
 
 
 @auth_required
@@ -1583,6 +1622,8 @@ async def start_web_server():
         app.router.add_get('/api/auth/metrics-token', api_auth_metrics_token)
         app.router.add_post('/api/auth/code', api_auth_code)
         app.router.add_post('/api/auth/link', api_auth_link)
+        app.router.add_post('/api/auth/logout', api_auth_logout)
+        app.router.add_post('/api/auth/logout-all', api_auth_logout_all)
         app.router.add_get('/api/consent', api_consent_get)
         app.router.add_post('/api/consent', api_consent_post)
         app.router.add_delete('/api/account', api_account_delete)
@@ -1732,12 +1773,19 @@ async def main():
         # остальные немедленно — но результаты нужно проверить явно, иначе
         # критичный сбой (например, падение polling бота) останется незамеченным
         # и процесс продолжит "жить" в полумёртвом состоянии.
-        task_names = ("web_server", "bot", "cleanup_stale_sessions", "supabase_keepalive")
+        # Отозванные токены загружаем до запуска API, чтобы после перезапуска
+        # не было окна, когда отозванный токен снова принимается
+        try:
+            await load_revocations()
+        except Exception as e:
+            logger.error(f"Initial token revocation load failed: {type(e).__name__}")
+        task_names = ("web_server", "bot", "cleanup_stale_sessions", "supabase_keepalive", "revocation_sync")
         results = await asyncio.gather(
             start_web_server(),
             start_bot(),
             cleanup_stale_sessions(),
             supabase_keepalive(),
+            revocation_sync_loop(),
             return_exceptions=True
         )
         for name, result in zip(task_names, results):

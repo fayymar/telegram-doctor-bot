@@ -14,6 +14,7 @@ consents. При изменении текста согласия увеличи
 import time
 
 from database.connection import run_query, supabase_client
+from security.auth import WEB_USER_ID_MIN, derive_web_user_id
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -97,58 +98,95 @@ async def record_consent(user_id: int | None, source: str, session_id: str | Non
 _USER_TABLES = ("consents", "messages", "consultations", "medications", "health_diary", "health_metrics", "user_profiles")
 
 
-async def _linked_user_ids(user_id: int) -> list[int]:
-    """
-    Аккаунты, связанные с user_id привязкой сайт <-> Telegram (/api/auth/link).
-    Привязка возможна только кодом, который бот выдаёт владельцу Telegram, поэтому
-    оба аккаунта принадлежат одному человеку и удаляются вместе.
-    """
-    ids = {user_id}
-    own = await run_query(
-        lambda: supabase_client.table("user_profiles")
-        .select("linked_telegram_id, linked_web_id")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    back = await run_query(
-        lambda: supabase_client.table("user_profiles")
-        .select("user_id")
-        .or_(f"linked_telegram_id.eq.{user_id},linked_web_id.eq.{user_id}")
-        .execute()
-    )
-    for row in own.data or []:
-        for key in ("linked_telegram_id", "linked_web_id"):
-            try:
-                if row.get(key):
-                    ids.add(int(row[key]))
-            except (TypeError, ValueError):
-                pass
-    for row in back.data or []:
-        if row.get("user_id") is not None:
-            ids.add(int(row["user_id"]))
-    return sorted(ids)
+# Поиск входа Supabase Auth перебором списка пользователей (для аккаунтов,
+# созданных до того, как auth_uid стал сохраняться в профиле)
+_AUTH_PAGE_SIZE = 1000
+_AUTH_SCAN_PAGES = 20
 
 
-async def delete_all_user_data(user_id: int, include_linked: bool = True) -> None:
+async def _auth_uids_for(ids: list[int]) -> dict[int, str]:
     """
-    Удаляет все данные пользователя во всех таблицах, включая записи о согласии
-    (отзыв согласия). При include_linked — и в привязанном аккаунте (сайт <-> Telegram):
-    так работают «Удалить аккаунт» и /deletedata. Без него удаляется только этот аккаунт
-    (например, когда пользователь просто заблокировал бота).
+    Для веб-аккаунтов (вход через Google/Apple/email) находит UUID пользователя
+    Supabase Auth: сначала по сохранённому auth_uid, иначе перебором списка
+    пользователей. Номер аккаунта вычисляется из UUID (derive_web_user_id),
+    поэтому совпадение проверяется в обе стороны.
+    """
+    web_ids = {i for i in ids if i >= WEB_USER_ID_MIN}
+    if not web_ids:
+        return {}
+    found: dict[int, str] = {}
+    resp = await run_query(
+        lambda: supabase_client.table("user_profiles")
+        .select("user_id, auth_uid")
+        .in_("user_id", sorted(web_ids))
+        .execute()
+    )
+    for row in resp.data or []:
+        uid = row.get("auth_uid")
+        if uid and derive_web_user_id(uid) == int(row["user_id"]):
+            found[int(row["user_id"])] = uid
+    missing = web_ids - set(found)
+    page = 1
+    while missing and page <= _AUTH_SCAN_PAGES:
+        users = await run_query(supabase_client.auth.admin.list_users, page, _AUTH_PAGE_SIZE)
+        for u in users or []:
+            wid = derive_web_user_id(str(u.id))
+            if wid in missing:
+                found[wid] = str(u.id)
+                missing.discard(wid)
+        if not users or len(users) < _AUTH_PAGE_SIZE:
+            missing = set()  # просмотрели всех пользователей: входа у них просто нет
+            break
+        page += 1
+    if missing:
+        # Не успели просмотреть весь список — нельзя утверждать, что вход удалён
+        raise RuntimeError("auth user scan limit reached")
+    return found
+
+
+async def delete_all_user_data(user_id: int) -> None:
+    """
+    Удаляет все данные аккаунта во всех таблицах, включая записи о согласии
+    (отзыв согласия), отзывает его токены и удаляет вход Supabase Auth
+    (Google/Apple/email). Так работают «Удалить аккаунт», /deletedata и
+    блокировка бота.
+
+    Привязанный аккаунт (сайт <-> Telegram) НЕ удаляется: код привязки
+    подтверждает только владельца Telegram, а не того, кто ввёл его на сайте,
+    поэтому привязка не даёт права удалять другой аккаунт. Связь с ним
+    разрывается, его данные остаются, их удаляют отдельно.
+
     Ошибка в одной таблице не прерывает удаление остальных, но в конце
     пробрасывается, чтобы пользователь узнал о сбое.
     """
+    ids = [user_id]
+    # Вход Supabase Auth ищем ДО удаления: его UUID хранится в профиле. Если найти
+    # не удалось, ничего не удаляем — иначе вход пережил бы удаление без следа.
     try:
-        ids = await _linked_user_ids(user_id) if include_linked else [user_id]
+        auth_uids = await _auth_uids_for(ids)
     except Exception as e:
-        logger.error(f"Linked accounts lookup failed for user {user_id}: {type(e).__name__}")
-        raise RuntimeError("failed to resolve linked accounts") from e
+        logger.error(f"Auth user lookup failed for user {user_id}: {type(e).__name__}")
+        raise RuntimeError("failed to resolve auth user") from e
     global _deletions
     _deletions += 1
-    for uid in ids:
-        _consent_cache.pop(uid, None)
+    _consent_cache.pop(user_id, None)
     failed = []
+    # Все выданные токены (сайт, Mini App, Shortcut) перестают действовать
+    try:
+        from services.sessions import revoke_all_tokens
+        await revoke_all_tokens(ids)
+    except Exception as e:
+        # В памяти токены уже отозваны; запись в базу повторится в фоне, но сообщаем
+        # о сбое, чтобы пользователь повторил удаление
+        logger.error(f"Token revocation persist failed for user {user_id}: {type(e).__name__}")
+        failed.append("token_revocation")
     for table in _USER_TABLES:
+        if table == "user_profiles" and any(t in _USER_TABLES for t in failed):
+            # Профиль (последний в списке) хранит auth_uid — указатель на вход
+            # Supabase. Если что-то не удалилось, оставляем профиль, чтобы повтор
+            # удаления нашёл и вход, и остаток данных
+            failed.append(table)
+            continue
         try:
             await run_query(lambda t=table: supabase_client.table(t).delete().in_("user_id", ids).execute())
         except Exception as e:
@@ -162,11 +200,31 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
         logger.error(f"Delete user data failed: table=consents (final) user={user_id}: {type(e).__name__}")
         if "consents" not in failed:
             failed.append("consents")
+    # Разрываем привязку в профиле другого аккаунта
+    for column in ("linked_telegram_id", "linked_web_id"):
+        try:
+            await run_query(
+                lambda c=column: supabase_client.table("user_profiles")
+                .update({c: None}).eq(c, str(user_id)).execute()
+            )
+        except Exception as e:
+            logger.error(f"Unlink failed: column={column} user={user_id}: {type(e).__name__}")
+            failed.append("unlink")
+    # Вход Supabase удаляем, только если все данные действительно стёрты: иначе
+    # человек потерял бы единственный способ войти и удалить оставшееся (новый вход
+    # через Google/email — это новый аккаунт с другим номером)
+    data_failed = [t for t in failed if t in _USER_TABLES]
+    for uid in ([] if data_failed else auth_uids.values()):
+        try:
+            await run_query(supabase_client.auth.admin.delete_user, uid)
+        except Exception as e:
+            logger.error(f"Delete auth user failed for user {user_id}: {type(e).__name__}")
+            if "auth" not in failed:
+                failed.append("auth")
     # Повторно: параллельная проверка has_consent могла снова закэшировать
     # согласие, пока строки ещё не были удалены
     _deletions += 1
-    for uid in ids:
-        _consent_cache.pop(uid, None)
+    _consent_cache.pop(user_id, None)
     if failed:
         raise RuntimeError(f"failed to delete from: {', '.join(failed)}")
-    logger.info(f"All data deleted for user {user_id} (accounts: {len(ids)}) at {int(time.time())}")
+    logger.info(f"All data deleted for user {user_id} at {int(time.time())}")

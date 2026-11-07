@@ -20,10 +20,12 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 from urllib.parse import parse_qsl
 
 from config import BOT_TOKEN
+from security import revocation
 
 # Секрет для подписи токенов. Если SESSION_SECRET не задан — выводим его из
 # BOT_TOKEN (детерминированно), чтобы не требовать новую переменную окружения.
@@ -56,15 +58,22 @@ def _sign(data: bytes) -> str:
 
 def issue_token(user_id: int, scope: str = SCOPE_SESSION, ttl: int | None = SESSION_TTL) -> str:
     """Создаёт подписанный токен. ttl=None — бессрочный (для токена метрик)."""
-    payload = {"uid": int(user_id), "scp": scope, "iat": int(time.time())}
+    now = time.time()
+    payload = {
+        "uid": int(user_id),
+        "scp": scope,
+        "iat": int(now),
+        "iatm": revocation.issue_ms(user_id),
+        "jti": secrets.token_urlsafe(12),  # чтобы можно было отозвать именно этот токен
+    }
     if ttl is not None:
         payload["exp"] = int(time.time()) + ttl
     body = _b64e(json.dumps(payload, separators=(",", ":")).encode())
     return f"{body}.{_sign(body.encode())}"
 
 
-def verify_token(token: str, allowed_scopes: tuple[str, ...] = (SCOPE_SESSION,)) -> int | None:
-    """Возвращает user_id, если токен валиден и его scope разрешён, иначе None."""
+def decode_token(token: str, allowed_scopes: tuple[str, ...] = (SCOPE_SESSION,)) -> dict | None:
+    """Возвращает содержимое токена, если он валиден, не истёк, не отозван и scope разрешён."""
     if not token or token.count(".") != 1:
         return None
     body, sig = token.split(".")
@@ -76,12 +85,21 @@ def verify_token(token: str, allowed_scopes: tuple[str, ...] = (SCOPE_SESSION,))
         scope = payload["scp"]
     except (ValueError, KeyError, TypeError):
         return None
-    if scope not in allowed_scopes:
+    if not isinstance(payload, dict) or scope not in allowed_scopes:
         return None
     exp = payload.get("exp")
     if exp is not None and time.time() > exp:
         return None
-    return uid
+    if revocation.is_revoked(uid, payload):
+        return None
+    payload["uid"] = uid
+    return payload
+
+
+def verify_token(token: str, allowed_scopes: tuple[str, ...] = (SCOPE_SESSION,)) -> int | None:
+    """Возвращает user_id, если токен валиден и его scope разрешён, иначе None."""
+    payload = decode_token(token, allowed_scopes)
+    return payload["uid"] if payload else None
 
 
 def _fresh(auth_date, max_age: int) -> bool:
