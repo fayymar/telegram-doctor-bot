@@ -31,6 +31,14 @@ def _isolated_token_revocation(monkeypatch):
         return type("R", (), {"data": []})()
 
     monkeypatch.setattr(sessions, "run_query", fake_run_query)
+    # Незавершённые диалоги: без базы и с чистым состоянием
+    from services import persistent_state
+    monkeypatch.setattr(persistent_state, "run_query", fake_run_query)
+    persistent_state._deleted_users.clear()
+    for store in persistent_state._stores:
+        store._writer._dirty.clear()
+        store._writer._tasks.clear()
+        store._writer.persisted.clear()
     sessions._pending_tokens.clear()
     sessions._pending_cutoffs.clear()
     revocation._reset_for_tests()

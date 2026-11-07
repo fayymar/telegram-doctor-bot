@@ -9,7 +9,6 @@ from api.common import (
     _unauthorized,
     auth_required,
     consent_required,
-    consultation_sessions,
     json_response,
 )
 from bot.instance import bot
@@ -44,7 +43,7 @@ async def _redeem_code_from_request(request: web.Request) -> tuple[dict | None, 
         body = await request.json()
     except Exception:
         return None, json_response({"error": "invalid json"}, status=400)
-    entry = redeem_site_code(str(body.get("code", "")) if isinstance(body, dict) else "")
+    entry = await redeem_site_code(str(body.get("code", "")) if isinstance(body, dict) else "")
     if not entry:
         return None, json_response({"error": "invalid_code", "message": "Код неверный или истёк"}, status=400)
     return entry, None
@@ -330,10 +329,6 @@ async def api_consent_post(request: web.Request) -> web.Response:
 async def api_account_delete(request: web.Request) -> web.Response:
     """DELETE /api/account — удаляет все данные пользователя и отзывает согласие."""
     user_id = request["user_id"]
-    # Незавершённые консультации в памяти тоже содержат данные о здоровье
-    for sid, session in list(consultation_sessions.items()):
-        if session.get("user_id") == user_id:
-            consultation_sessions.pop(sid, None)
     try:
         await delete_all_user_data(user_id)
     except Exception as e:
