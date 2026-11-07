@@ -318,3 +318,14 @@ def test_no_db_write_for_user_right_after_account_deletion(db):
             persistent_state._stores.remove(fsm)
     asyncio.run(go())
     assert not db.get("fsm_states") and not db.get("consultation_sessions")
+
+
+def test_oversized_session_stays_in_memory_only(db):
+    async def go():
+        consultation_sessions["big"] = {"_created_at": datetime.now(timezone.utc), "user_id": 5,
+                                        "user_profile": {"notes": "x" * 200_000}}
+        consultation_store.save("big")
+        await persistent_state.wait_all()
+    asyncio.run(go())
+    assert not db.get("consultation_sessions")
+    assert "big" in consultation_sessions

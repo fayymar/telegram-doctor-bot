@@ -30,12 +30,22 @@ _MAX_CONSULTATION_SESSIONS = 2000
 CONSULTATION_SESSION_TTL = 7200  # незавершённая консультация живёт 2 часа
 
 
+# Обычная сессия консультации — единицы КБ. Слишком большую (например, с
+# огромными полями профиля) в базу не пишем: она остаётся только в памяти,
+# как раньше, и не раздувает базу и загрузку при старте
+_MAX_PERSISTED_SESSION_BYTES = 64 * 1024
+
+
 def _session_to_row(session_id: str, session: dict) -> dict | None:
     # Гостевые консультации в базу не пишем: по политике конфиденциальности
     # их данные есть только в памяти сервера
     if session.get("user_id") is None:
         return None
     data = {k: v for k, v in session.items() if k != "_created_at"}
+    size = len(json.dumps(data, ensure_ascii=False, default=str).encode())
+    if size > _MAX_PERSISTED_SESSION_BYTES:
+        logger.warning(f"Consultation session too large to persist ({size} bytes)")
+        return None
     created = session.get("_created_at")
     return {
         "session_id": session_id,
