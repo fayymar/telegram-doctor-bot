@@ -286,6 +286,13 @@ async def api_consultation_result(request: web.Request) -> web.Response:
             red_flag=bool(session.get("red_flag")),
         )
 
+        # Пока шёл запрос к AI, аккаунт могли удалить (токен отозван): тогда
+        # итог не сохраняем — иначе запись о здоровье появилась бы уже после удаления
+        if session.get("user_id") and _token_user_id(request) != session["user_id"]:
+            consultation_sessions.pop(str(session_id), None)
+            consultation_store.save(session_id)
+            return _unauthorized()
+
         # Сохраняем в Supabase (только для авторизованных пользователей)
         specialists_raw = recommendation.get("specialists", [])
         consultation_id = None

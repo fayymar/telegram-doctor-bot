@@ -376,3 +376,19 @@ def test_delete_forgets_in_progress_state_of_this_user_only(monkeypatch):
         site_codes.pop("BBBB3333", None)
         from services import persistent_state
         persistent_state._stores.remove(fsm)
+
+
+def test_bot_consultation_not_saved_after_consent_withdrawn(monkeypatch):
+    # /deletedata во время анализа: итог консультации в базу не записывается
+    from bot.handlers import consultation as bot_consultation
+    inserted = []
+
+    async def no(uid):
+        return False
+    monkeypatch.setattr(consent, "has_consent", no)
+
+    async def rq(func, *a, **kw):
+        inserted.append(func)
+    monkeypatch.setattr(bot_consultation, "run_query", rq)
+    asyncio.run(bot_consultation._save_consultation(5, {"symptoms": "x"}, {"specialists": []}))
+    assert inserted == []

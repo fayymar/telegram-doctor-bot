@@ -352,3 +352,32 @@ def test_consultation_not_created_if_account_deleted_during_ai_call(monkeypatch)
         assert r.status == 401, await r.text()
     run(t)
     assert set(main.consultation_sessions) == before
+
+
+def test_result_not_saved_if_account_deleted_during_ai_call(monkeypatch):
+    # итог консультации не записывается, если аккаунт удалили, пока работал AI
+    from security import revocation
+
+    async def yes(uid):
+        return True
+    patch_api(monkeypatch, "has_consent", yes)
+    inserted = []
+
+    async def run_query(func, *a, **kw):
+        inserted.append(func)
+        return type("R", (), {"data": [{"id": 1}]})()
+    patch_api(monkeypatch, "run_query", run_query)
+
+    async def final(*a, **kw):
+        revocation.remember_cutoff(100, revocation.now_ms())  # «удаление» посреди запроса
+        return {"specialists": [{"name": "ЛОР"}], "urgency": "low"}
+    patch_api(monkeypatch, "get_final_recommendation", final)
+    main.consultation_sessions["s9"] = {"user_id": 100, "questions": [], "answers": [],
+                                        "symptoms": "x", "duration": "1 день", "anamnesis_questions": []}
+
+    async def t(c):
+        r = await c.post("/api/consultation/result", json={"session_id": "s9"},
+                         headers={"Authorization": f"Bearer {issue_token(100)}"})
+        assert r.status == 401, await r.text()
+    run(t)
+    assert inserted == [] and "s9" not in main.consultation_sessions
