@@ -1,250 +1,119 @@
-# 🩺 Telegram Medical Bot
+# Symed — Telegram-бот и API для подбора врача по симптомам
 
-Telegram бот для анализа симптомов и рекомендации врача-специалиста с использованием Google Gemini AI.
+Пользователь описывает симптомы, AI задаёт уточняющие вопросы и рекомендует
+1–3 узких специалиста с уровнем срочности. Symed не ставит диагноз и не заменяет врача.
 
-## 🚀 Возможности
+Этот репозиторий — бэкенд: Telegram-бот и HTTP API для сайта
+([symed-web](https://github.com/fayymar/symed-web), symed.uz) и Telegram Mini App
+([symptoMed-app](https://github.com/fayymar/symptoMed-app)).
 
-- 📝 Сбор симптомов через текст или голосовые сообщения
-- 🤖 Интеллектуальный анализ с помощью Google Gemini AI
-- ❓ Уточняющие вопросы для точной диагностики
-- 👨‍⚕️ Рекомендация узких специалистов (не терапевта)
-- 📊 Учёт возраста, пола, роста и веса
-- 📋 История консультаций
-- 🟢 Определение уровня срочности
+## Что умеет
 
-## 🛠 Технологический стек
+- **Консультация.** Проверка «красных флагов» по правилам, затем уточняющие
+  вопросы, давность и анамнез от AI. Опасные симптомы всегда дают «экстренно»
+  и совет вызвать 103.
+- **Профиль и анамнез:** хронические болезни, аллергии, наследственность, образ жизни.
+- **История консультаций** и её экспорт.
+- **Лекарства** с напоминаниями, **дневник здоровья**, **показатели**
+  (пульс, давление, SpO2, шаги) с алертами при отклонениях.
+- **Поиск клиник и специалистов.**
+- **Вход на сайт:**
+  - через Telegram: бот присылает одноразовый код (`/login`);
+  - через Google, Apple или email (Supabase Auth);
+  - в Mini App — автоматически по подписи Telegram.
+- **Согласие на обработку данных о здоровье** (закон РУз «О персональных данных»).
+  Без него данные не обрабатываются. Отзыв и полное удаление — `/deletedata`
+  в боте или «Удалить аккаунт» на сайте.
 
-- **Python 3.11+**
-- **aiogram 3.x** - фреймворк для Telegram ботов
-- **Google Gemini 1.5 Flash** - AI для анализа (бесплатно)
-- **Supabase** - PostgreSQL база данных (бесплатно)
-- **Render** - хостинг (бесплатно)
+## Стек
 
-## 📦 Установка
+- Python 3.11, [aiogram 3](https://docs.aiogram.dev/) (бот) и aiohttp (HTTP API) в одном процессе.
+- **AI:**
+  - Anthropic Claude Haiku — основная модель;
+  - Groq (Llama) — резервная, если задан `GROQ_API_KEY`.
+- Supabase (PostgreSQL, регион Франкфурт): данные и Supabase Auth для входа на сайт.
+- Хостинг — Render, `render.yaml`.
 
-### 1. Клонирование репозитория
+## Структура
 
-```bash
-git clone <your-repo-url>
-cd telegram-doctor-bot
+```
+main.py                 # запуск: бот, HTTP API, фоновые задачи
+api/                    # HTTP API для сайта и Mini App
+  routes.py             # все маршруты /api/*
+  common.py             # авторизация, согласие, лимиты, CORS, сессии консультаций
+  consultation.py, profile.py, health.py, auth.py
+config.py               # переменные окружения
+bot/                    # Telegram-бот: обработчики, клавиатуры, состояния, middleware согласия
+services/
+  consultation_agent.py # логика консультации (вопросы, итоговая рекомендация)
+  ai_service.py         # вызовы Claude / Groq
+  red_flags.py          # правила опасных симптомов
+  consent.py            # согласие, удаление всех данных пользователя
+  sessions.py           # отзыв токенов (выход, выход везде)
+security/               # токены сессии (HMAC), проверка подписи Telegram, отзыв токенов
+database/connection.py  # клиент Supabase
+utils/                  # валидация, экспорт анамнеза, логирование
+migrations/             # SQL-миграции по порядку (001…)
+tests/                  # pytest
+API_AUTH.md             # авторизация API, согласие, выход
 ```
 
-### 2. Создание виртуального окружения
+## Запуск локально
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# или
-venv\Scripts\activate  # Windows
-```
-
-### 3. Установка зависимостей
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Настройка переменных окружения
-
-Создайте файл `.env` на основе `.env.example`:
-
-```bash
-cp .env.example .env
-```
-
-Заполните переменные окружения:
-
-#### 4.1. Получение Telegram Bot Token
-
-1. Найдите [@BotFather](https://t.me/BotFather) в Telegram
-2. Отправьте команду `/newbot`
-3. Следуйте инструкциям
-4. Скопируйте токен в `.env`
-
-#### 4.2. Получение Google Gemini API Key
-
-1. Перейдите на [Google AI Studio](https://aistudio.google.com/app/apikey)
-2. Войдите с аккаунтом Google
-3. Нажмите "Get API Key" → "Create API key"
-4. Скопируйте ключ в `.env`
-
-**Лимиты бесплатного tier:**
-- 15 запросов в минуту
-- 1 млн токенов в день
-- Достаточно для ~1000-2000 консультаций в день
-
-#### 4.3. Настройка Supabase
-
-1. Зарегистрируйтесь на [Supabase](https://supabase.com)
-2. Создайте новый проект (регион выберите ближайший)
-3. Перейдите в Settings → API
-4. Скопируйте:
-   - `URL` → `SUPABASE_URL`
-   - `anon public` ключ → `SUPABASE_KEY`
-
-5. Создайте таблицы:
-   - Перейдите в SQL Editor
-   - Вставьте содержимое файла `supabase_schema.sql`
-   - Нажмите "Run"
-
-### 5. Локальный запуск
-
-```bash
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+cp .env.example .env   # заполнить ключи
 python main.py
 ```
 
-Бот запустится и будет ожидать сообщений.
+Переменные окружения (подробно — в `.env.example`):
 
-## 🌐 Деплой на Render
+| Переменная | Что это |
+| --- | --- |
+| `BOT_TOKEN` | токен бота от @BotFather |
+| `ANTHROPIC_API_KEY` | ключ Anthropic (основная модель) |
+| `GROQ_API_KEY` | необязательно: резервная модель |
+| `SUPABASE_URL`, `SUPABASE_KEY` | проект Supabase; ключ **service_role**, не anon |
+| `SESSION_SECRET` | необязательно: секрет подписи токенов (по умолчанию выводится из `BOT_TOKEN`) |
+| `PORT`, `DEBUG`, `FSM_TIMEOUT`, `LOG_DIR` | необязательные настройки |
 
-### 1. Подготовка
+## База данных
 
-Создайте файл `render.yaml`:
+Миграции лежат в `migrations/`. Их выполняют по порядку номеров в Supabase → SQL Editor:
+сначала `001_schema.sql`, затем остальные. Для таблиц включён RLS, и доступ к данным есть
+только у бэкенда с ключом service_role (см. `009_enable_rls.sql`). Ключ service_role должен
+быть в `SUPABASE_KEY` **до** выполнения `009`.
 
-```yaml
-services:
-  - type: web
-    name: telegram-doctor-bot
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
-    envVars:
-      - key: BOT_TOKEN
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
-```
-
-### 2. Деплой
-
-1. Залейте код на GitHub
-2. Зарегистрируйтесь на [Render](https://render.com)
-3. New → Web Service → Connect Repository
-4. Выберите свой репозиторий
-5. Render автоматически обнаружит `render.yaml`
-6. Добавьте переменные окружения в разделе Environment
-7. Нажмите "Create Web Service"
-
-**⚠️ Важно:** Free tier Render засыпает после 15 минут неактивности. Для Telegram бота это нормально - он проснётся при первом сообщении.
-
-## 📁 Структура проекта
-
-```
-telegram-doctor-bot/
-├── bot/
-│   ├── __init__.py
-│   ├── handlers/
-│   │   ├── __init__.py
-│   │   ├── basic.py           # Базовые команды (/start, /help)
-│   │   ├── profile.py         # Регистрация и профиль
-│   │   └── consultation.py    # Консультации
-│   ├── keyboards.py           # Клавиатуры бота
-│   └── states.py              # FSM состояния
-├── services/
-│   ├── __init__.py
-│   └── ai_service.py          # Работа с Gemini AI
-├── database/
-│   ├── __init__.py
-│   ├── models.py              # Pydantic модели
-│   └── connection.py          # Supabase клиент
-├── config.py                  # Конфигурация
-├── main.py                    # Точка входа
-├── requirements.txt           # Зависимости
-├── supabase_schema.sql        # SQL схема
-├── .env.example               # Пример переменных окружения
-└── README.md                  # Документация
-```
-
-## 🔧 Использование
-
-### Команды бота
-
-- `/start` - Начало работы / регистрация
-- `/help` - Справка
-- `/cancel` - Отмена текущего действия
-
-### Главное меню
-
-- **🩺 Новая консультация** - Начать новую консультацию
-- **📋 Мои консультации** - История обращений
-- **👤 Мой профиль** - Просмотр и редактирование профиля
-- **ℹ️ Помощь** - Справка по использованию
-
-### Процесс консультации
-
-1. Пользователь описывает симптомы
-2. Бот задаёт уточняющие вопросы
-3. AI анализирует данные с учётом профиля
-4. Бот рекомендует специалиста и уровень срочности
-
-## 🎯 Рекомендуемые специалисты
-
-Бот может рекомендовать следующих врачей:
-
-- Кардиолог
-- Невролог
-- Гастроэнтеролог
-- Эндокринолог
-- Пульмонолог
-- Уролог
-- Гинеколог
-- Дерматолог
-- Офтальмолог
-- Отоларинголог (ЛОР)
-- Ортопед
-- Ревматолог
-- Аллерголог
-- Психиатр
-- Онколог
-
-## 📊 Уровни срочности
-
-- 🟢 **Низкая** - плановый визит
-- 🟡 **Средняя** - запишитесь в ближайшее время
-- 🟠 **Высокая** - обратитесь как можно скорее
-- 🔴 **ЭКСТРЕННАЯ** - немедленно вызовите скорую помощь
-
-## ⚠️ Disclaimer
-
-**Этот бот НЕ заменяет медицинскую консультацию!**
-
-- Предоставляет только рекомендации
-- Не ставит диагноз
-- При серьёзных симптомах немедленно обращайтесь к врачу или в скорую помощь
-
-## 🔮 Планы развития
-
-- [ ] Mini App для записи к врачу
-- [ ] Поддержка голосовых сообщений
-- [ ] Интеграция с медицинскими сервисами
-- [ ] Напоминания о приёмах
-- [ ] Мультиязычность
-
-## 📝 Лицензия
-
-MIT
-
-## 👨‍💻 Разработка
-
-Для разработки рекомендуется:
-
-1. Установить pre-commit hooks
-2. Использовать `black` для форматирования
-3. Запускать `pylint` для проверки кода
+## Тесты
 
 ```bash
-pip install black pylint pre-commit
-pre-commit install
+pytest -q
 ```
 
-## 🤝 Вклад в проект
+Тесты не ходят в Telegram, Anthropic и Supabase: окружение подменяется в `tests/conftest.py`.
+Они запускаются в GitHub Actions на каждый push и pull request.
 
-Pull requests приветствуются! Для серьёзных изменений сначала откройте issue для обсуждения.
+## API
 
-## 📞 Контакты
+Все `/api/*`, кроме входа и гостевой консультации, требуют `Authorization: Bearer <token>`.
+Подробности — в [API_AUTH.md](API_AUTH.md).
 
-По вопросам и предложениям создавайте issues в репозитории.
+- **Вход и выход:**
+  - `POST /api/auth/code` — по коду из бота;
+  - `/api/auth/social` — Google, Apple, email;
+  - `/api/auth/telegram-webapp` — Mini App;
+  - `/api/auth/telegram-widget` — Telegram Login Widget;
+  - `/api/auth/link` — привязать Telegram;
+  - `GET /api/auth/me`;
+  - `GET /api/auth/metrics-token`;
+  - `POST /api/auth/logout`, `/api/auth/logout-all`.
+- **Согласие и удаление:** `GET`/`POST /api/consent`, `DELETE /api/account`.
+- **Консультация:**
+  - `POST /api/consultation/start`, `answer`, `duration`, `result`, `feedback`;
+  - `GET /api/consultations/{user_id}`.
+- **Данные пользователя:** `/api/profile/{user_id}`, `/api/medications/{user_id}`, `/api/diary/{user_id}`.
+- **Показатели:**
+  - `POST /api/health/heartrate`, `/api/health/metrics`, `/api/health/metrics/report/{user_id}`;
+  - `GET /api/health/metrics/{user_id}`, `/api/health/heartrate/{user_id}`.
+- **Служебное:** `GET /health`.

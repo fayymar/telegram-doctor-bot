@@ -34,11 +34,6 @@ class EditProfile(StatesGroup):
     waiting_for_weight = State()
 
 
-class ConsultationAgent(StatesGroup):
-    """Состояния для агентной консультации (устаревший класс, оставлен для совместимости)"""
-    in_progress = State()
-
-
 class Consultation(StatesGroup):
     """Состояния для многоэтапной консультации"""
     waiting_for_symptoms = State()      # Ввод симптомов

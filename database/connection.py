@@ -45,7 +45,7 @@ if supabase_key_role(SUPABASE_KEY) == "anon":
     logger.warning(
         "⚠️ SUPABASE_KEY is a public (anon) key. The same key is shipped to browsers, "
         "so anyone can query tables directly. Switch SUPABASE_KEY to the service_role "
-        "key and run migration_enable_rls.sql."
+        "key and run migrations/009_enable_rls.sql."
     )
 
 

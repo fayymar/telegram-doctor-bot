@@ -61,7 +61,7 @@ Authorization: Bearer <token>
 
 ## Supabase
 Бэкенд должен работать с ключом **service_role**, а на всех таблицах должен быть включён RLS
-(см. `migration_enable_rls.sql`, там описан порядок действий). Публичный anon-ключ, который лежит в коде сайта,
+(см. `migrations/009_enable_rls.sql`, там описан порядок действий). Публичный anon-ключ, который лежит в коде сайта,
 после этого не даёт доступа к таблицам.
 
 ## Согласие на обработку данных
@@ -81,7 +81,7 @@ Authorization: Bearer <token>
 
 Токены подписаны HMAC; сервер дополнительно хранит отозванные токены
 (`revoked_tokens`) и момент «выйти везде» для пользователя (`token_cutoffs`),
-см. `migration_add_token_revocation.sql`.
+см. `migrations/012_add_token_revocation.sql`.
 
 - `POST /api/auth/logout` — отзывает токен запроса («Выйти» на этом устройстве).
 - `POST /api/auth/logout-all` — отзывает все токены пользователя, включая токен метрик.

@@ -80,7 +80,6 @@ def validate_birthdate(date_string: str) -> tuple[bool, str, datetime | None]:
         dt = _make_date(d, mo, y)
         if dt:
             birthdate = dt
-            goto_check = True
         else:
             return False, "❌ Неверная дата. Проверьте день и месяц.", None
 
@@ -90,7 +89,6 @@ def validate_birthdate(date_string: str) -> tuple[bool, str, datetime | None]:
         dt = _make_date(int(parts[2]), int(parts[1]), int(parts[0]))
         if dt:
             birthdate = dt
-            goto_check = True
         else:
             return False, "❌ Неверная дата.", None
 
@@ -143,7 +141,6 @@ def validate_birthdate(date_string: str) -> tuple[bool, str, datetime | None]:
         if not dt:
             return False, "❌ Неверная дата. Проверьте день и месяц.", None
         birthdate = dt
-        goto_check = True
 
     # ── Проверки после парсинга ───────────────────────────────────────────
     if birthdate > datetime.now():
@@ -248,28 +245,6 @@ def validate_weight(weight_str: str) -> tuple[bool, str, float | None]:
 
     except ValueError:
         return False, "❌ Пожалуйста, введите число\nНапример: 70 или 70.5", None
-
-
-def validate_text_input(text: str, min_length: int = 1, max_length: int = 1000) -> tuple[bool, str]:
-    """
-    Валидация текстового ввода
-    """
-    text = text.strip()
-
-    if len(text) < min_length:
-        return False, f"❌ Текст слишком короткий (минимум {min_length} символов)"
-
-    if len(text) > max_length:
-        return False, f"❌ Текст слишком длинный (максимум {max_length} символов)"
-
-    if re.search(r'(.)\1{20,}', text):
-        return False, "❌ Текст содержит подозрительные повторяющиеся символы"
-
-    url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
-    if re.search(url_pattern, text):
-        return False, "❌ Текст не должен содержать ссылки"
-
-    return True, ""
 
 
 def sanitize_text(text: str) -> str:

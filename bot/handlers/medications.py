@@ -196,7 +196,7 @@ async def process_times(message: Message, state: FSMContext):
     for time_str in times:
         try:
             # Проверяем формат HH:MM
-            time_obj = datetime.strptime(time_str, "%H:%M").time()
+            datetime.strptime(time_str, "%H:%M")  # проверка формата
             valid_times.append(time_str)
         except ValueError:
             await message.answer(

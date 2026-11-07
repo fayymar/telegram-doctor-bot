@@ -100,24 +100,3 @@ def format_bmi_info(weight_kg: float, height_cm: int, gender: str | None = None)
     return info
 
 
-def calculate_age(birthdate_str: str) -> int | None:
-    """
-    Вычисляет возраст по дате рождения
-
-    Args:
-        birthdate_str: Дата рождения в формате ISO (YYYY-MM-DD)
-
-    Returns:
-        Возраст в годах или None если не удалось вычислить
-    """
-    try:
-        from datetime import datetime
-        birthdate = datetime.fromisoformat(birthdate_str)
-        today = datetime.now()
-        age = today.year - birthdate.year
-        # Корректируем если день рождения еще не наступил в этом году
-        if (today.month, today.day) < (birthdate.month, birthdate.day):
-            age -= 1
-        return age
-    except Exception:
-        return None

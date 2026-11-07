@@ -1,6 +1,6 @@
 """
 Отзыв токенов сессии с сохранением в базе (таблицы revoked_tokens и
-token_cutoffs, см. migration_add_token_revocation.sql).
+token_cutoffs, см. migrations/012_add_token_revocation.sql).
 
 Сначала отзыв применяется в памяти (security/revocation.py) — он действует
 сразу, даже если запись в базу не удалась; база нужна, чтобы отзыв пережил
@@ -126,7 +126,7 @@ async def revocation_sync_loop() -> None:
             revocation.purge_expired()
             now_iso = _iso(revocation.now_ms() / 1000)
             await run_query(
-                lambda: supabase_client.table("revoked_tokens").delete().lt("expires_at", now_iso).execute()
+                lambda cutoff=now_iso: supabase_client.table("revoked_tokens").delete().lt("expires_at", cutoff).execute()
             )
         except Exception as e:
             logger.error(f"Token revocation sync failed: {type(e).__name__}")

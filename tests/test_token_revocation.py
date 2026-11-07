@@ -3,7 +3,7 @@ import asyncio
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-import main
+from tests.helpers import api as main, patch_api
 from security import revocation
 from security.auth import SCOPE_METRICS, decode_token, issue_token, verify_token
 from services import sessions

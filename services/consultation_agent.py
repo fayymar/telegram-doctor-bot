@@ -223,9 +223,8 @@ async def validate_symptoms(symptoms: str, language: str = "ru") -> tuple[bool, 
     """
     Проверяет что пользователь описал симптомы здоровья, а не что-то постороннее.
     Использует Claude Haiku с чётким промптом.
-    Эмбеддинговая валидация (sentence-transformers) отключена — PyTorch 1.2GB
-    не влезает в Render free tier (512MB RAM). Код сохранён в symptom_validator.py
-    для будущего использования на платном плане.
+    (Проверка через эмбеддинги sentence-transformers не используется: PyTorch
+    не помещается в 512 МБ памяти бесплатного тарифа Render.)
     """
     text = symptoms.strip()
     if len(text) < 3:
