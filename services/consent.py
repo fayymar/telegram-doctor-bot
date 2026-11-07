@@ -44,6 +44,8 @@ _CACHE_LIMIT = 50_000
 # Счётчик удалений данных: проверка, начатая до удаления, не должна
 # закэшировать согласие, прочитанное из ещё не удалённых строк
 _deletions = 0
+# Пользователи, чьё удаление идёт прямо сейчас
+_deleting_users: set[int] = set()
 
 
 def _remember(user_id: int, version: str) -> None:
@@ -90,9 +92,12 @@ async def record_consent(user_id: int | None, source: str, session_id: str | Non
     # Если параллельно шло удаление данных, строка могла быть уже стёрта — не кэшируем
     if user_id is not None and _deletions == started_at:
         _remember(user_id, CONSENT_VERSION)
-        # снова дал согласие после удаления аккаунта — диалоги снова сохраняются
-        from services.persistent_state import clear_user_deleted
-        clear_user_deleted(user_id)
+        # снова дал согласие после удаления аккаунта — диалоги снова сохраняются.
+        # Пока удаление этого пользователя идёт, запрет не снимаем: удаление ещё
+        # сотрёт и это согласие (consents удаляется и в конце)
+        if user_id not in _deleting_users:
+            from services.persistent_state import clear_user_deleted
+            clear_user_deleted(user_id)
     logger.info(f"Consent {CONSENT_VERSION} recorded: user={user_id} source={source}")
 
 
@@ -178,6 +183,19 @@ async def delete_all_user_data(user_id: int) -> None:
     global _deletions
     _deletions += 1
     _consent_cache.pop(user_id, None)
+    _deleting_users.add(user_id)
+    try:
+        return await _delete_all_user_data_inner(user_id, ids, auth_uids)
+    finally:
+        _deleting_users.discard(user_id)
+        # Запрет записи в базу — заново с этого момента: согласие, данное во
+        # время удаления, само удаление и стёрло
+        from services.persistent_state import mark_user_deleted
+        mark_user_deleted(user_id)
+
+
+async def _delete_all_user_data_inner(user_id: int, ids: list, auth_uids: dict) -> None:
+    global _deletions
     failed = []
     # Незавершённые консультации и шаги диалогов в памяти тоже содержат данные
     # о здоровье. Сначала убираем их из памяти и дожидаемся фоновой записи в

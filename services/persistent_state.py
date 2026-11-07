@@ -39,6 +39,12 @@ _WRITE_RETRIES = 3
 _RETRY_DELAY = 5
 _LOAD_PAGE = 1000
 
+# Шаг диалога — единицы КБ. Слишком большой (например, с огромными полями
+# профиля) в базу не пишем: он остаётся только в памяти, как раньше
+_MAX_PERSISTED_FSM_BYTES = 64 * 1024
+# Сколько шагов диалогов поднимать при старте (самые свежие)
+_MAX_RESTORED_FSM_STATES = 10_000
+
 # Все хранилища: чтобы разом загрузить, почистить и забыть пользователя
 _stores: list = []
 
@@ -49,6 +55,11 @@ _stores: list = []
 # числе если человек сразу же снова согласился. В памяти работа идёт как обычно.
 DELETE_GUARD_SECONDS = 300
 _deleted_users: dict[int, dict] = {}  # user_id -> {"at": monotonic, "reconsented": bool}
+
+
+def mark_user_deleted(user_id: int) -> None:
+    """Запрет записи в базу для пользователя (удаление аккаунта)."""
+    _deleted_users[int(user_id)] = {"at": time.monotonic(), "reconsented": False}
 
 
 def clear_user_deleted(user_id: int) -> None:
@@ -311,13 +322,18 @@ class PersistentMemoryStorage(MemoryStorage):
             return None
         if _is_deleted(key.user_id):
             return None
-        return _jsonable({
+        row = _jsonable({
             "key": skey,
             "user_id": key.user_id,
             "state": record.state,
             "data": record.data,
             "updated_at": _iso(_now()),
         })
+        size = len(json.dumps(row, ensure_ascii=False).encode())
+        if size > _MAX_PERSISTED_FSM_BYTES:
+            logger.warning(f"FSM state too large to persist ({size} bytes)")
+            return None
+        return row
 
     async def set_state(self, key: StorageKey, state=None) -> None:
         await super().set_state(key, state)
@@ -330,6 +346,8 @@ class PersistentMemoryStorage(MemoryStorage):
     async def load(self) -> int:
         since = _now() - timedelta(seconds=self.keep_seconds)
         rows = await _load_rows(self.table, "key", since, "updated_at")
+        if len(rows) > _MAX_RESTORED_FSM_STATES:
+            rows = sorted(rows, key=lambda r: str(r.get("updated_at") or ""))[-_MAX_RESTORED_FSM_STATES:]
         for row in rows:
             try:
                 key = _str_to_key(row["key"])
@@ -384,7 +402,7 @@ async def purge_old_all() -> None:
 async def forget_user(user_id: int) -> None:
     """Убирает из памяти незавершённые диалоги пользователя и дожидается, пока
     это дойдёт до базы (чтобы фоновая запись не вернула их после удаления)."""
-    _deleted_users[int(user_id)] = {"at": time.monotonic(), "reconsented": False}
+    mark_user_deleted(user_id)
     for store in _stores:
         await store.forget_user(user_id)
 

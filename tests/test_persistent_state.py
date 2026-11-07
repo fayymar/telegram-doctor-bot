@@ -382,3 +382,52 @@ def test_rotated_code_does_not_come_back_after_restart(db):
     assert asyncio.run(go()) is None
     assert set(shared.site_codes) == {"NEWNEW33"}
     assert [r["code"] for r in db["site_codes"]] == ["NEWNEW33"]
+
+
+def test_oversized_dialog_step_stays_in_memory_only(db):
+    key = StorageKey(bot_id=1, chat_id=92, user_id=92)
+
+    async def go():
+        fsm = PersistentMemoryStorage()
+        try:
+            await fsm.set_data(key, {"user_profile": {"notes": "x" * 200_000}})
+            await fsm.wait()
+            return await fsm.get_data(key)
+        finally:
+            persistent_state._stores.remove(fsm)
+    data = asyncio.run(go())
+    assert not db.get("fsm_states") and len(data["user_profile"]["notes"]) == 200_000
+
+
+def test_consent_given_during_deletion_does_not_reenable_saving(db, monkeypatch):
+    # согласие пришло, пока шло удаление: удаление его же и стирает,
+    # поэтому запрет записи в базу должен остаться
+    from services import consent
+    monkeypatch.setattr(persistent_state, "DELETE_GUARD_SECONDS", -1)
+
+    async def no_consent(uid):
+        return False
+    monkeypatch.setattr(consent, "has_consent", no_consent)
+
+    async def rq(func, *a, **kw):
+        return SimpleNamespace(data=[])
+    monkeypatch.setattr(consent, "run_query", rq)
+
+    async def auth_uids(ids):
+        return {}
+    monkeypatch.setattr(consent, "_auth_uids_for", auth_uids)
+
+    async def revoke(ids):
+        pass
+    from services import sessions
+    monkeypatch.setattr(sessions, "revoke_all_tokens", revoke)
+
+    real_inner = consent._delete_all_user_data_inner
+
+    async def inner_with_consent(user_id, ids, auth):
+        await consent.record_consent(user_id, "web")  # параллельный POST /api/consent
+        return await real_inner(user_id, ids, auth)
+    monkeypatch.setattr(consent, "_delete_all_user_data_inner", inner_with_consent)
+
+    asyncio.run(consent.delete_all_user_data(93))
+    assert persistent_state._is_deleted(93)
