@@ -191,6 +191,13 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
     for uid in ids:
         _consent_cache.pop(uid, None)
     failed = []
+    # Все выданные токены (сайт, Mini App, Shortcut) перестают действовать
+    try:
+        from services.sessions import revoke_all_tokens
+        await revoke_all_tokens(ids)
+    except Exception as e:
+        # В памяти токены уже отозваны; не сохранилось только в базе
+        logger.error(f"Token revocation persist failed for user {user_id}: {type(e).__name__}")
     # Вход через Google/Apple/email (Supabase Auth) тоже удаляем — вместе с email.
     # UUID ищем до удаления профиля: он хранится там.
     try:

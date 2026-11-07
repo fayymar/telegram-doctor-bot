@@ -76,3 +76,14 @@ Authorization: Bearer <token>
 - `DELETE /api/account` (с токеном) удаляет все данные пользователя и отзывает согласие.
 - В боте: до согласия работают только `/start`, `/help`, `/login`, `/link`, `/privacy`, `/deletedata`, `/cancel`.
   `/deletedata` удаляет данные из всех таблиц, включая согласие.
+
+## Выход и отзыв токенов
+
+Токены подписаны HMAC; сервер дополнительно хранит отозванные токены
+(`revoked_tokens`) и момент «выйти везде» для пользователя (`token_cutoffs`),
+см. `migration_add_token_revocation.sql`.
+
+- `POST /api/auth/logout` — отзывает токен запроса («Выйти» на этом устройстве).
+- `POST /api/auth/logout-all` — отзывает все токены пользователя, включая токен метрик.
+- Удаление аккаунта (`DELETE /api/account`, `/deletedata`) отзывает все токены
+  удалённых аккаунтов. Mini App после этого сама входит заново по initData.

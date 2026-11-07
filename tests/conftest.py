@@ -14,3 +14,23 @@ os.environ.setdefault(
     "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.c2lnbmF0dXJl",
 )
 os.environ.pop("SESSION_SECRET", None)
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolated_token_revocation(monkeypatch):
+    """Отзыв токенов: в тестах без базы и с чистым состоянием в памяти."""
+    from security import revocation
+    from services import sessions
+
+    calls = []
+
+    async def fake_run_query(func, *a, **kw):
+        calls.append(func)
+        return type("R", (), {"data": []})()
+
+    monkeypatch.setattr(sessions, "run_query", fake_run_query)
+    revocation._reset_for_tests()
+    yield calls
+    revocation._reset_for_tests()

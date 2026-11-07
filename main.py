@@ -28,6 +28,7 @@ from bot.middlewares import ConsentMiddleware, FSMTimeoutMiddleware
 from config import BOT_TOKEN
 from database.connection import run_query, supabase_client
 from services.consent import CONSENT_VERSION, delete_all_user_data, has_consent, record_consent
+from services.sessions import load_revocations, revoke_all_tokens, revoke_token, revocation_sync_loop
 from services.consultation_agent import (
     check_red_flags,
     get_anamnesis_questions,
@@ -41,6 +42,7 @@ from security.auth import (
     SCOPE_SESSION,
     bearer_token,
     derive_web_user_id,
+    decode_token,
     issue_token,
     verify_login_widget,
     verify_token,
@@ -1400,6 +1402,29 @@ async def api_auth_link(request: web.Request) -> web.Response:
 
 
 @auth_required
+async def api_auth_logout(request: web.Request) -> web.Response:
+    """POST /api/auth/logout — отзывает токен этого запроса («Выйти» на этом устройстве)."""
+    payload = decode_token(bearer_token(request.headers) or "")
+    if payload:
+        try:
+            await revoke_token(payload)
+        except Exception as e:
+            # В памяти токен уже отозван; не сохранилось только в базе
+            logger.error(f"Logout persist failed: {type(e).__name__}")
+    return json_response({"ok": True})
+
+
+@auth_required
+async def api_auth_logout_all(request: web.Request) -> web.Response:
+    """POST /api/auth/logout-all — отзывает все токены пользователя (все устройства)."""
+    try:
+        await revoke_all_tokens([request["user_id"]])
+    except Exception as e:
+        logger.error(f"Logout-all persist failed: {type(e).__name__}")
+    return json_response({"ok": True})
+
+
+@auth_required
 async def api_auth_me(request: web.Request) -> web.Response:
     """GET /api/auth/me — проверка токена; возвращает user_id владельца."""
     return json_response({"id": request["user_id"]})
@@ -1592,6 +1617,8 @@ async def start_web_server():
         app.router.add_get('/api/auth/metrics-token', api_auth_metrics_token)
         app.router.add_post('/api/auth/code', api_auth_code)
         app.router.add_post('/api/auth/link', api_auth_link)
+        app.router.add_post('/api/auth/logout', api_auth_logout)
+        app.router.add_post('/api/auth/logout-all', api_auth_logout_all)
         app.router.add_get('/api/consent', api_consent_get)
         app.router.add_post('/api/consent', api_consent_post)
         app.router.add_delete('/api/account', api_account_delete)
@@ -1741,12 +1768,19 @@ async def main():
         # остальные немедленно — но результаты нужно проверить явно, иначе
         # критичный сбой (например, падение polling бота) останется незамеченным
         # и процесс продолжит "жить" в полумёртвом состоянии.
-        task_names = ("web_server", "bot", "cleanup_stale_sessions", "supabase_keepalive")
+        # Отозванные токены загружаем до запуска API, чтобы после перезапуска
+        # не было окна, когда отозванный токен снова принимается
+        try:
+            await load_revocations()
+        except Exception as e:
+            logger.error(f"Initial token revocation load failed: {type(e).__name__}")
+        task_names = ("web_server", "bot", "cleanup_stale_sessions", "supabase_keepalive", "revocation_sync")
         results = await asyncio.gather(
             start_web_server(),
             start_bot(),
             cleanup_stale_sessions(),
             supabase_keepalive(),
+            revocation_sync_loop(),
             return_exceptions=True
         )
         for name, result in zip(task_names, results):
