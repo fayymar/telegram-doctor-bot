@@ -154,6 +154,14 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
         except Exception as e:
             logger.error(f"Delete user data failed: table={table} user={user_id}: {type(e).__name__}")
             failed.append(table)
+    # Повторно удаляем записи о согласии: параллельный POST /api/consent или
+    # кнопка «Согласен» могли вставить строку уже после первого удаления
+    try:
+        await run_query(lambda: supabase_client.table("consents").delete().in_("user_id", ids).execute())
+    except Exception as e:
+        logger.error(f"Delete user data failed: table=consents (final) user={user_id}: {type(e).__name__}")
+        if "consents" not in failed:
+            failed.append("consents")
     # Повторно: параллельная проверка has_consent могла снова закэшировать
     # согласие, пока строки ещё не были удалены
     _deletions += 1

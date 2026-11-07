@@ -50,7 +50,9 @@ def test_delete_all_user_data_covers_every_table(monkeypatch):
     asyncio.run(consent.delete_all_user_data(5))
     assert {t for t, _ in deleted} == {"messages", "consultations", "medications", "health_diary",
                                        "health_metrics", "consents", "user_profiles"}
-    assert deleted[0][0] == "consents" and deleted[-1][0] == "user_profiles"
+    # consents — первой и ещё раз в конце (на случай параллельно вставленного согласия)
+    assert deleted[0][0] == "consents" and deleted[-1][0] == "consents"
+    assert deleted[-2][0] == "user_profiles"
     assert all(ids == [5] for _, ids in deleted)
     assert 5 not in consent._consent_cache
 
