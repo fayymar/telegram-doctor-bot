@@ -44,21 +44,63 @@ def test_legacy_token_without_jti_is_revoked_by_cutoff():
     assert verify_token(legacy) is None
 
 
+class _FakeTable:
+    """Таблица Supabase для load_revocations: select/gt/order/range/execute."""
+
+    def __init__(self, rows):
+        self.rows, self.lo, self.hi = rows, 0, None
+
+    def select(self, *a):
+        return self
+
+    def gt(self, *a):
+        return self
+
+    def order(self, *a):
+        return self
+
+    def range(self, lo, hi):
+        self.lo, self.hi = lo, hi
+        return self
+
+    def execute(self):
+        # как PostgREST: не больше 1000 строк за запрос, даже без range
+        hi = len(self.rows) if self.hi is None else self.hi + 1
+        return type("R", (), {"data": self.rows[self.lo:min(hi, self.lo + 1000)]})()
+
+
+def _fake_revocation_db(monkeypatch, cutoffs=(), tokens=()):
+    from types import SimpleNamespace
+    tables = {"token_cutoffs": list(cutoffs), "revoked_tokens": list(tokens)}
+    monkeypatch.setattr(sessions, "supabase_client", SimpleNamespace(table=lambda t: _FakeTable(tables[t])))
+
+    async def fake_run_query(func, *a, **kw):
+        return func()
+    monkeypatch.setattr(sessions, "run_query", fake_run_query)
+
+
 def test_revocations_survive_restart(monkeypatch):
     # после перезапуска состояние в памяти пустое и берётся из базы
     tok = issue_token(5)
     cutoff = revocation.now_ms()
     revocation._reset_for_tests()
-
-    async def fake_run_query(func, *a, **kw):
-        q = func.__code__.co_consts
-        if any("token_cutoffs" == c for c in q):
-            return type("R", (), {"data": [{"user_id": 5, "not_before_ms": cutoff}]})()
-        return type("R", (), {"data": []})()
-    monkeypatch.setattr(sessions, "run_query", fake_run_query)
+    _fake_revocation_db(monkeypatch, cutoffs=[{"user_id": 5, "not_before_ms": cutoff}])
     assert verify_token(tok) == 5
     asyncio.run(sessions.load_revocations())
     assert verify_token(tok) is None
+
+
+def test_revocations_load_beyond_row_limit(monkeypatch):
+    # Supabase отдаёт максимум 1000 строк за запрос — загрузка идёт постранично
+    toks = [issue_token(5) for _ in range(3)]
+    payloads = [decode_token(t) for t in toks]
+    exp = "2099-01-01T00:00:00+00:00"
+    rows = [{"jti": f"filler{i}", "expires_at": exp} for i in range(2 * sessions._LOAD_PAGE)]
+    rows += [{"jti": p["jti"], "expires_at": exp} for p in payloads]
+    revocation._reset_for_tests()
+    _fake_revocation_db(monkeypatch, tokens=rows)
+    asyncio.run(sessions.load_revocations())
+    assert all(verify_token(t) is None for t in toks)
 
 
 import pytest

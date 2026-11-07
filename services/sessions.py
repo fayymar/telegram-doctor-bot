@@ -80,16 +80,35 @@ async def _flush_pending_locked() -> None:
                 _pending_cutoffs.pop(u, None)
 
 
+_LOAD_PAGE = 1000  # Supabase отдаёт не больше 1000 строк за запрос
+
+
+async def _load_all(build_query) -> list[dict]:
+    """Читает все строки постранично: без этого отзывы сверх лимита строк
+    молча терялись бы при перезапуске."""
+    rows: list[dict] = []
+    start = 0
+    while True:
+        page = await run_query(lambda s=start: build_query().range(s, s + _LOAD_PAGE - 1).execute())
+        data = page.data or []
+        rows.extend(data)
+        if len(data) < _LOAD_PAGE:
+            return rows
+        start += _LOAD_PAGE
+
+
 async def load_revocations() -> None:
     """Загружает отзывы из базы в память (объединяя с уже известными)."""
     now_iso = _iso(revocation.now_ms() / 1000)
-    cutoffs = await run_query(lambda: supabase_client.table("token_cutoffs").select("user_id, not_before_ms").execute())
-    for row in cutoffs.data or []:
-        revocation.remember_cutoff(int(row["user_id"]), int(row["not_before_ms"]))
-    tokens = await run_query(
-        lambda: supabase_client.table("revoked_tokens").select("jti, expires_at").gt("expires_at", now_iso).execute()
+    cutoffs = await _load_all(
+        lambda: supabase_client.table("token_cutoffs").select("user_id, not_before_ms").order("user_id")
     )
-    for row in tokens.data or []:
+    for row in cutoffs:
+        revocation.remember_cutoff(int(row["user_id"]), int(row["not_before_ms"]))
+    tokens = await _load_all(
+        lambda: supabase_client.table("revoked_tokens").select("jti, expires_at").gt("expires_at", now_iso).order("jti")
+    )
+    for row in tokens:
         exp = datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00")).timestamp()
         revocation.remember_revoked_token(row["jti"], exp)
     revocation.mark_loaded()
