@@ -142,3 +142,17 @@ def test_record_consent_is_idempotent_per_version(monkeypatch):
     for _ in range(3):
         asyncio.run(consent.record_consent(77, "web"))
     assert len(inserts) == 1
+
+
+def test_consent_cache_cleared_after_rows_deleted(monkeypatch):
+    # параллельный запрос закэшировал согласие посреди удаления
+    deleted = _fake_db(monkeypatch, [{"user_id": 5}])
+    real_run = consent.run_query
+
+    async def racing_run_query(func, *a, **kw):
+        result = await real_run(func, *a, **kw)
+        consent._consent_cache[5] = consent.CONSENT_VERSION
+        return result
+    monkeypatch.setattr(consent, "run_query", racing_run_query)
+    asyncio.run(consent.delete_all_user_data(5))
+    assert deleted and 5 not in consent._consent_cache

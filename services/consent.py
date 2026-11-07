@@ -144,6 +144,10 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
         except Exception as e:
             logger.error(f"Delete user data failed: table={table} user={user_id}: {type(e).__name__}")
             failed.append(table)
+    # Повторно: параллельная проверка has_consent могла снова закэшировать
+    # согласие, пока строки ещё не были удалены
+    for uid in ids:
+        _consent_cache.pop(uid, None)
     if failed:
         raise RuntimeError(f"failed to delete from: {', '.join(failed)}")
     logger.info(f"All data deleted for user {user_id} (accounts: {len(ids)}) at {int(time.time())}")
