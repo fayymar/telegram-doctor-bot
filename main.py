@@ -968,6 +968,7 @@ async def api_health_metrics_post(request: web.Request) -> web.Response:
 
 
 @auth_required
+@consent_required
 async def api_health_metrics_report(request: web.Request) -> web.Response:
     """POST /api/health/metrics/report/{user_id} — ручной отчёт о последних метриках"""
     user_id = request["user_id"]
