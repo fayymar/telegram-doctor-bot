@@ -85,7 +85,7 @@ def db(monkeypatch):
     from services.consent import CONSENT_VERSION
     # согласие есть у всех тестовых пользователей, кроме 666
     data = {"_writes": [], "consents": [{"user_id": u, "version": CONSENT_VERSION}
-                                         for u in (1, 5, 7, 42, 55, 77, 78, 80)]}
+                                         for u in (1, 5, 7, 42, 55, 56, 57, 77, 78, 80)]}
     monkeypatch.setattr(persistent_state, "supabase_client",
                         SimpleNamespace(table=lambda name: _FakeTable(data, name)))
 
@@ -361,6 +361,7 @@ def test_dialogs_saved_again_after_new_consent(db, monkeypatch):
             await fsm.wait()
             assert not db.get("fsm_states")
             await consent.record_consent(91, "bot")
+            db["consents"].append({"user_id": 91, "version": consent.CONSENT_VERSION})
             # сразу после согласия — ещё пауза (старые запросы могли не закончиться)
             await fsm.set_data(key, {"step": "сразу после согласия"})
             await fsm.wait()
@@ -469,3 +470,21 @@ def test_rows_of_users_without_consent_are_not_restored(db):
     assert [r["session_id"] for r in db["consultation_sessions"]] == ["ok"]
     assert gone_state is None and ok_state == "S"
     assert [r["user_id"] for r in db["fsm_states"]] == [55]
+
+
+def test_no_db_write_without_consent_in_db(db):
+    # запрет «аккаунт удалён» живёт в памяти процесса; другой процесс о нём не
+    # знает — поэтому перед записью сверяемся с согласием в базе
+    key = StorageKey(bot_id=1, chat_id=666, user_id=666)
+
+    async def go():
+        fsm = PersistentMemoryStorage()
+        try:
+            await fsm.set_data(key, {"symptoms": "x"})
+            consultation_sessions["s666"] = {"_created_at": datetime.now(timezone.utc), "user_id": 666}
+            consultation_store.save("s666")
+            await persistent_state.wait_all()
+        finally:
+            persistent_state._stores.remove(fsm)
+    asyncio.run(go())
+    assert not db.get("fsm_states") and not db.get("consultation_sessions")

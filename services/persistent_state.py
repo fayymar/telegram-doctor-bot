@@ -136,6 +136,21 @@ async def _consented_users(user_ids) -> set[int]:
     return found
 
 
+async def _persist_allowed(user_id) -> bool:
+    """
+    Можно ли писать данные этого пользователя в базу. Запрет после удаления
+    аккаунта (_deleted_users) живёт только в памяти процесса: при двух
+    процессах (выкладка на Render) и после перезапуска его не видно. Поэтому
+    сверяемся и с базой — удаление аккаунта стирает согласие первым, и без
+    действующего согласия данные не пишутся. Ошибку запроса пробрасываем.
+    """
+    if user_id is None:
+        return True
+    if _is_deleted(user_id):
+        return False
+    return int(user_id) in await _consented_users([user_id])
+
+
 class _Writer:
     """
     Пишет в базу текущее состояние записи. Для каждой записи одновременно идёт
@@ -143,9 +158,11 @@ class _Writer:
     предыдущая, пишется ещё раз — так в базе всегда последнее состояние.
     """
 
-    def __init__(self, table: str, id_col: str, snapshot: Callable[[str], dict | None]):
+    def __init__(self, table: str, id_col: str, snapshot: Callable[[str], dict | None],
+                 require_consent: bool = False):
         self.table = table
         self.id_col = id_col
+        self.require_consent = require_consent
         self._snapshot = snapshot  # id -> строка для базы или None (удалить)
         self._dirty: set[str] = set()
         self._tasks: dict[str, asyncio.Task] = {}
@@ -170,6 +187,11 @@ class _Writer:
                     continue  # в базе этой записи нет и не должно быть
                 for attempt in range(_WRITE_RETRIES):
                     try:
+                        if (row is not None and self.require_consent
+                                and not await _persist_allowed(row.get("user_id"))):
+                            row = None  # согласия нет — данных в базе быть не должно
+                        if row is None and rid not in self.persisted:
+                            break
                         if row is None:
                             await run_query(
                                 lambda: supabase_client.table(self.table).delete()
@@ -240,7 +262,7 @@ class DictStore:
         self._to_row = to_row
         self._from_row = from_row
         self._owner = owner
-        self._writer = _Writer(table, id_col, self._snapshot)
+        self._writer = _Writer(table, id_col, self._snapshot, require_consent=require_consent)
         _stores.append(self)
 
     def _snapshot(self, rid: str) -> dict | None:
@@ -341,7 +363,7 @@ class PersistentMemoryStorage(MemoryStorage):
     def __init__(self, keep_seconds: int = KEEP_SECONDS) -> None:
         super().__init__()
         self.keep_seconds = keep_seconds
-        self._writer = _Writer(self.table, "key", self._snapshot)
+        self._writer = _Writer(self.table, "key", self._snapshot, require_consent=True)
         _stores.append(self)
 
     def _snapshot(self, skey: str) -> dict | None:
