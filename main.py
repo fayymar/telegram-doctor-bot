@@ -1435,8 +1435,13 @@ async def api_consent_post(request: web.Request) -> web.Response:
 @auth_required
 async def api_account_delete(request: web.Request) -> web.Response:
     """DELETE /api/account — удаляет все данные пользователя и отзывает согласие."""
+    user_id = request["user_id"]
+    # Незавершённые консультации в памяти тоже содержат данные о здоровье
+    for sid, session in list(consultation_sessions.items()):
+        if session.get("user_id") == user_id:
+            consultation_sessions.pop(sid, None)
     try:
-        await delete_all_user_data(request["user_id"])
+        await delete_all_user_data(user_id)
     except Exception as e:
         logger.error(f"Account delete failed: {type(e).__name__}")
         return json_response({"error": "Internal server error"}, status=500)
