@@ -252,3 +252,20 @@ def test_failed_db_write_does_not_break_the_dialog(db, monkeypatch):
         finally:
             persistent_state._stores.remove(fsm)
     assert asyncio.run(go()) == {"step": 1}
+
+
+def test_restore_keeps_memory_limit_and_ttl(db, monkeypatch):
+    # при запуске не больше лимита сессий в памяти (самые свежие) и только моложе 2 часов
+    monkeypatch.setattr(consultation_store, "max_items", 2)
+    now = datetime.now(timezone.utc)
+    db["consultation_sessions"] = [
+        {"session_id": f"s{i}", "user_id": 1, "data": {},
+         "created_at": (now - timedelta(minutes=10 * i)).isoformat()}
+        for i in range(4)
+    ] + [{"session_id": "stale", "user_id": 1, "data": {},
+          "created_at": (now - timedelta(hours=3)).isoformat()}]
+
+    async def go():
+        await consultation_store.load()
+    asyncio.run(go())
+    assert set(consultation_sessions) == {"s0", "s1"}

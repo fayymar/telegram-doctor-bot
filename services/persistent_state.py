@@ -9,8 +9,9 @@
 - в памяти остаётся рабочая копия — чтение быстрое, как раньше;
 - каждое изменение пишется в базу в фоне, строго по очереди для каждой записи
   (последнее состояние всегда побеждает), поэтому ответы не замедляются;
-- при запуске всё незавершённое подгружается обратно, записи старше суток
-  удаляются;
+- при запуске всё незавершённое подгружается обратно; в базе запись живёт не
+  дольше, чем в памяти (консультация — 2 часа, код входа — 5 минут, шаг
+  диалога бота — тайм-аут FSM), устаревшие удаляются;
 - при удалении аккаунта записи пользователя стираются вместе с остальными
   данными (services/consent.py).
 
@@ -30,7 +31,8 @@ from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-# Незавершённое старше суток не восстанавливаем: человек уже ушёл
+# Сколько хранить незавершённое, если хранилище не задало своё: в базе запись
+# живёт не дольше, чем в памяти, — лишние данные о здоровье не копятся
 KEEP_SECONDS = 24 * 3600
 _WRITE_RETRIES = 3
 _RETRY_DELAY = 5
@@ -163,11 +165,15 @@ class DictStore:
         from_row: Callable[[dict], tuple[str, dict]],
         owner: Callable[[dict], int | None],
         time_col: str = "created_at",
+        keep_seconds: int = KEEP_SECONDS,
+        max_items: int | None = None,
     ):
         self.items = items
         self.table = table
         self.id_col = id_col
         self.time_col = time_col
+        self.keep_seconds = keep_seconds
+        self.max_items = max_items
         self._to_row = to_row
         self._from_row = from_row
         self._owner = owner
@@ -185,8 +191,11 @@ class DictStore:
         self._writer.schedule(str(rid))
 
     async def load(self) -> int:
-        since = _now() - timedelta(seconds=KEEP_SECONDS)
+        since = _now() - timedelta(seconds=self.keep_seconds)
         rows = await _load_rows(self.table, self.id_col, since, self.time_col)
+        if self.max_items is not None and len(rows) > self.max_items:
+            # как и в памяти: при переполнении остаются самые свежие
+            rows = sorted(rows, key=lambda r: str(r.get(self.time_col) or ""))[-self.max_items:]
         for row in rows:
             rid, item = self._from_row(row)
             self.items.setdefault(rid, item)
@@ -194,7 +203,7 @@ class DictStore:
         return len(rows)
 
     async def purge_old(self) -> None:
-        cutoff = _iso(_now() - timedelta(seconds=KEEP_SECONDS))
+        cutoff = _iso(_now() - timedelta(seconds=self.keep_seconds))
         await run_query(
             lambda: supabase_client.table(self.table).delete().lt(self.time_col, cutoff).execute()
         )
@@ -225,8 +234,9 @@ class PersistentMemoryStorage(MemoryStorage):
 
     table = "fsm_states"
 
-    def __init__(self) -> None:
+    def __init__(self, keep_seconds: int = KEEP_SECONDS) -> None:
         super().__init__()
+        self.keep_seconds = keep_seconds
         self._writer = _Writer(self.table, "key", self._snapshot)
         _stores.append(self)
 
@@ -252,7 +262,7 @@ class PersistentMemoryStorage(MemoryStorage):
         self._writer.schedule(_key_to_str(key))
 
     async def load(self) -> int:
-        since = _now() - timedelta(seconds=KEEP_SECONDS)
+        since = _now() - timedelta(seconds=self.keep_seconds)
         rows = await _load_rows(self.table, "key", since, "updated_at")
         for row in rows:
             try:
@@ -267,7 +277,7 @@ class PersistentMemoryStorage(MemoryStorage):
         return len(rows)
 
     async def purge_old(self) -> None:
-        cutoff = _iso(_now() - timedelta(seconds=KEEP_SECONDS))
+        cutoff = _iso(_now() - timedelta(seconds=self.keep_seconds))
         await run_query(
             lambda: supabase_client.table(self.table).delete().lt("updated_at", cutoff).execute()
         )

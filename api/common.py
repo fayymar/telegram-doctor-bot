@@ -26,6 +26,8 @@ logger = setup_logger(__name__)
 # консультация пережила перезапуск сервера (services/persistent_state.py).
 # После любого изменения сессии вызывайте consultation_store.save(session_id).
 consultation_sessions: dict = {}
+_MAX_CONSULTATION_SESSIONS = 2000
+CONSULTATION_SESSION_TTL = 7200  # незавершённая консультация живёт 2 часа
 
 
 def _session_to_row(session_id: str, session: dict) -> dict | None:
@@ -57,10 +59,9 @@ consultation_store = DictStore(
     to_row=_session_to_row,
     from_row=_session_from_row,
     owner=lambda s: s.get("user_id"),
+    keep_seconds=CONSULTATION_SESSION_TTL,
+    max_items=_MAX_CONSULTATION_SESSIONS,
 )
-
-
-_MAX_CONSULTATION_SESSIONS = 2000
 
 
 # Ссылки на фоновые задачи: без них asyncio может собрать задачу сборщиком мусора

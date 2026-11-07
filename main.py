@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramConflictError
 from aiogram.types import MenuButtonDefault
 from aiohttp import web
 
-from api.common import consultation_sessions, consultation_store
+from api.common import CONSULTATION_SESSION_TTL, consultation_sessions, consultation_store
 from api.profile import _check_anamnesis_fields
 from api.routes import create_app
 from bot.handlers import (
@@ -25,6 +25,7 @@ from bot.handlers import (
 from bot.instance import bot  # общий для обработчиков и HTTP API
 from bot.middlewares import ConsentMiddleware, FSMTimeoutMiddleware
 from bot.shared import site_code_store, site_codes
+from config import FSM_TIMEOUT
 from database.connection import run_query, supabase_client
 from services import persistent_state
 from services.persistent_state import PersistentMemoryStorage
@@ -41,7 +42,7 @@ logger = setup_logger(__name__)
 
 # Шаги диалогов бота (анкета, консультация, дневник) хранятся и в базе —
 # чтобы перезапуск сервера не обрывал их (services/persistent_state.py)
-dp = Dispatcher(storage=PersistentMemoryStorage())
+dp = Dispatcher(storage=PersistentMemoryStorage(keep_seconds=FSM_TIMEOUT))
 
 # Регистрация middleware
 dp.message.middleware(FSMTimeoutMiddleware())
@@ -70,7 +71,7 @@ async def cleanup_stale_sessions():
         stale = []
         for sid, session in list(consultation_sessions.items()):
             created = session.get("_created_at")
-            if created and (now - created).total_seconds() > 7200:
+            if created and (now - created).total_seconds() > CONSULTATION_SESSION_TTL:
                 stale.append(sid)
         for sid in stale:
             consultation_sessions.pop(sid, None)
