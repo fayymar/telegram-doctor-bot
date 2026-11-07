@@ -192,3 +192,82 @@ def test_record_consent_during_deletion_does_not_cache(monkeypatch):
     consent._consent_cache.pop(8, None)
     asyncio.run(consent.record_consent(8, "web"))
     assert 8 not in consent._consent_cache
+
+
+def _fake_db_with_auth(monkeypatch, profiles, auth_users):
+    """Supabase с профилями и списком пользователей Auth; собирает удалённые входы."""
+    deleted_auth = []
+
+    class Q:
+        def __init__(self, table):
+            self.table, self.op, self.f = table, "select", {}
+        def select(self, *a):
+            return self
+        def delete(self):
+            self.op = "delete"
+            return self
+        def eq(self, col, val):
+            self.f["eq"] = val
+            return self
+        def in_(self, col, vals):
+            self.f["in"] = list(vals)
+            return self
+        def or_(self, expr):
+            self.f["or"] = expr
+            return self
+        def execute(self):
+            if self.op == "delete":
+                return SimpleNamespace(data=[])
+            if "in" in self.f:
+                return SimpleNamespace(data=[p for p in profiles if p["user_id"] in self.f["in"]])
+            if "eq" in self.f:
+                return SimpleNamespace(data=[p for p in profiles if p["user_id"] == self.f["eq"]])
+            return SimpleNamespace(data=[])
+
+    admin = SimpleNamespace(
+        list_users=lambda page=None, per_page=None: [SimpleNamespace(id=u) for u in auth_users] if page == 1 else [],
+        delete_user=lambda uid: deleted_auth.append(uid),
+    )
+    monkeypatch.setattr(consent, "supabase_client",
+                        SimpleNamespace(table=lambda t: Q(t), auth=SimpleNamespace(admin=admin)))
+
+    async def fake_run_query(func, *a, **kw):
+        return func(*a, **kw)
+    monkeypatch.setattr(consent, "run_query", fake_run_query)
+    return deleted_auth
+
+
+def test_delete_removes_supabase_login_by_stored_uid(monkeypatch):
+    from security.auth import derive_web_user_id
+    uid = "11111111-2222-3333-4444-555555555555"
+    web_id = derive_web_user_id(uid)
+    deleted_auth = _fake_db_with_auth(monkeypatch, [{"user_id": web_id, "auth_uid": uid}], auth_users=[])
+    asyncio.run(consent.delete_all_user_data(web_id))
+    assert deleted_auth == [uid]
+
+
+def test_delete_finds_supabase_login_without_stored_uid(monkeypatch):
+    from security.auth import derive_web_user_id
+    uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    other = "99999999-8888-7777-6666-555555555555"
+    web_id = derive_web_user_id(uid)
+    deleted_auth = _fake_db_with_auth(monkeypatch, [{"user_id": web_id}], auth_users=[other, uid])
+    asyncio.run(consent.delete_all_user_data(web_id))
+    assert deleted_auth == [uid]  # чужой вход не тронут
+
+
+def test_forged_auth_uid_is_ignored(monkeypatch):
+    # в профиле записан чужой UUID (не соответствующий номеру аккаунта) — его не удаляем
+    from security.auth import derive_web_user_id
+    uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    victim = "99999999-8888-7777-6666-555555555555"
+    web_id = derive_web_user_id(uid)
+    deleted_auth = _fake_db_with_auth(monkeypatch, [{"user_id": web_id, "auth_uid": victim}], auth_users=[uid, victim])
+    asyncio.run(consent.delete_all_user_data(web_id))
+    assert deleted_auth == [uid]
+
+
+def test_telegram_account_has_no_supabase_login(monkeypatch):
+    deleted_auth = _fake_db_with_auth(monkeypatch, [{"user_id": 7}], auth_users=["x"])
+    asyncio.run(consent.delete_all_user_data(7))
+    assert deleted_auth == []

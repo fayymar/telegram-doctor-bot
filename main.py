@@ -1303,9 +1303,18 @@ async def api_auth_social(request: web.Request) -> web.Response:
                 lambda: supabase_client.table("user_profiles").insert({
                     "user_id": user_id,
                     "full_name": name or first_name,
+                    "auth_uid": str(sb_user.id),
                 }).execute()
             )
             logger.info(f"Social auth: created user_id={user_id} via {provider}")
+        else:
+            # Аккаунты, созданные до появления auth_uid: дописываем его, чтобы
+            # «Удалить аккаунт» мог удалить и вход Supabase
+            await run_query(
+                lambda: supabase_client.table("user_profiles")
+                    .update({"auth_uid": str(sb_user.id)})
+                    .eq("user_id", user_id).is_("auth_uid", "null").execute()
+            )
     except Exception as e:
         logger.error(f"Social auth error: {e}", exc_info=True)
         return json_response({"error": "Internal server error"}, status=500)

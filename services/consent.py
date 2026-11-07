@@ -14,6 +14,7 @@ consents. При изменении текста согласия увеличи
 import time
 
 from database.connection import run_query, supabase_client
+from security.auth import WEB_USER_ID_MIN, derive_web_user_id
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -129,6 +130,48 @@ async def _linked_user_ids(user_id: int) -> list[int]:
     return sorted(ids)
 
 
+# Поиск входа Supabase Auth перебором списка пользователей (для аккаунтов,
+# созданных до того, как auth_uid стал сохраняться в профиле)
+_AUTH_PAGE_SIZE = 1000
+_AUTH_SCAN_PAGES = 20
+
+
+async def _auth_uids_for(ids: list[int]) -> dict[int, str]:
+    """
+    Для веб-аккаунтов (вход через Google/Apple/email) находит UUID пользователя
+    Supabase Auth: сначала по сохранённому auth_uid, иначе перебором списка
+    пользователей. Номер аккаунта вычисляется из UUID (derive_web_user_id),
+    поэтому совпадение проверяется в обе стороны.
+    """
+    web_ids = {i for i in ids if i >= WEB_USER_ID_MIN}
+    if not web_ids:
+        return {}
+    found: dict[int, str] = {}
+    resp = await run_query(
+        lambda: supabase_client.table("user_profiles")
+        .select("user_id, auth_uid")
+        .in_("user_id", sorted(web_ids))
+        .execute()
+    )
+    for row in resp.data or []:
+        uid = row.get("auth_uid")
+        if uid and derive_web_user_id(uid) == int(row["user_id"]):
+            found[int(row["user_id"])] = uid
+    missing = web_ids - set(found)
+    page = 1
+    while missing and page <= _AUTH_SCAN_PAGES:
+        users = await run_query(supabase_client.auth.admin.list_users, page, _AUTH_PAGE_SIZE)
+        for u in users or []:
+            wid = derive_web_user_id(str(u.id))
+            if wid in missing:
+                found[wid] = str(u.id)
+                missing.discard(wid)
+        if not users or len(users) < _AUTH_PAGE_SIZE:
+            break
+        page += 1
+    return found
+
+
 async def delete_all_user_data(user_id: int, include_linked: bool = True) -> None:
     """
     Удаляет все данные пользователя во всех таблицах, включая записи о согласии
@@ -148,6 +191,14 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
     for uid in ids:
         _consent_cache.pop(uid, None)
     failed = []
+    # Вход через Google/Apple/email (Supabase Auth) тоже удаляем — вместе с email.
+    # UUID ищем до удаления профиля: он хранится там.
+    try:
+        auth_uids = await _auth_uids_for(ids)
+    except Exception as e:
+        logger.error(f"Auth user lookup failed for user {user_id}: {type(e).__name__}")
+        auth_uids = {}
+        failed.append("auth")
     for table in _USER_TABLES:
         try:
             await run_query(lambda t=table: supabase_client.table(t).delete().in_("user_id", ids).execute())
@@ -162,6 +213,13 @@ async def delete_all_user_data(user_id: int, include_linked: bool = True) -> Non
         logger.error(f"Delete user data failed: table=consents (final) user={user_id}: {type(e).__name__}")
         if "consents" not in failed:
             failed.append("consents")
+    for uid in auth_uids.values():
+        try:
+            await run_query(supabase_client.auth.admin.delete_user, uid)
+        except Exception as e:
+            logger.error(f"Delete auth user failed for user {user_id}: {type(e).__name__}")
+            if "auth" not in failed:
+                failed.append("auth")
     # Повторно: параллельная проверка has_consent могла снова закэшировать
     # согласие, пока строки ещё не были удалены
     _deletions += 1
