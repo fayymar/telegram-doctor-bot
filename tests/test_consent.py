@@ -172,3 +172,21 @@ def test_has_consent_started_before_deletion_does_not_cache(monkeypatch):
     consent._consent_cache.pop(6, None)
     assert asyncio.run(consent.has_consent(6)) is True
     assert 6 not in consent._consent_cache
+
+
+def test_record_consent_during_deletion_does_not_cache(monkeypatch):
+    class Q:
+        def __getattr__(self, name):
+            return lambda *a, **kw: self
+    monkeypatch.setattr(consent, "supabase_client", SimpleNamespace(table=lambda t: Q()))
+    calls = {"n": 0}
+
+    async def run_query(func, *a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:  # вставка согласия; удаление данных проходит в это же время
+            consent._deletions += 1
+        return SimpleNamespace(data=[])
+    monkeypatch.setattr(consent, "run_query", run_query)
+    consent._consent_cache.pop(8, None)
+    asyncio.run(consent.record_consent(8, "web"))
+    assert 8 not in consent._consent_cache

@@ -84,8 +84,10 @@ async def record_consent(user_id: int | None, source: str, session_id: str | Non
         row["user_id"] = user_id
     if session_id:
         row["session_id"] = session_id
+    started_at = _deletions
     await run_query(lambda: supabase_client.table("consents").insert(row).execute())
-    if user_id is not None:
+    # Если параллельно шло удаление данных, строка могла быть уже стёрта — не кэшируем
+    if user_id is not None and _deletions == started_at:
         _remember(user_id, CONSENT_VERSION)
     logger.info(f"Consent {CONSENT_VERSION} recorded: user={user_id} source={source}")
 
