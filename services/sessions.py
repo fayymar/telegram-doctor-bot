@@ -25,6 +25,9 @@ REVOCATION_RETRY_INTERVAL = 30  # пока список не загружен �
 # чтобы отзыв пережил перезапуск сервера
 _pending_tokens: dict[str, float] = {}
 _pending_cutoffs: dict[int, int] = {}
+# Записи в базу идут строго по очереди: иначе более старый момент «выйти везде»
+# мог бы записаться после нового и откатить его
+_flush_lock = asyncio.Lock()
 
 
 def _iso(ts: float) -> str:
@@ -56,6 +59,11 @@ async def revoke_all_tokens(user_ids: list[int]) -> None:
 async def _flush_pending() -> None:
     """Сохраняет в базу накопленные отзывы. При ошибке они остаются в очереди
     (повтор — в revocation_sync_loop), а исключение пробрасывается."""
+    async with _flush_lock:
+        await _flush_pending_locked()
+
+
+async def _flush_pending_locked() -> None:
     if _pending_tokens:
         batch = dict(_pending_tokens)
         rows = [{"jti": j, "expires_at": _iso(e)} for j, e in batch.items()]

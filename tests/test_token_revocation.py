@@ -198,3 +198,36 @@ def test_logout_all_covers_linked_account(monkeypatch):
             r = await c.get("/api/auth/me", headers={"Authorization": f"Bearer {tok}"})
             assert r.status == 401
     _run(t)
+
+
+def test_concurrent_logout_all_keeps_latest_cutoff(monkeypatch):
+    # две «выйти везде» подряд, первая запись в базу медленная: итог в базе должен
+    # быть от последнего вызова, а не откатиться к первому
+    captured = []
+
+    class Q:
+        def upsert(self, rows, **kw):
+            captured.append(rows)
+            return self
+
+        def execute(self):
+            return None
+    monkeypatch.setattr(sessions, "supabase_client", type("C", (), {"table": staticmethod(lambda t: Q())})())
+
+    calls = {"n": 0}
+
+    async def run_query(func, *a, **kw):
+        calls["n"] += 1
+        await asyncio.sleep(0.05 if calls["n"] == 1 else 0)  # первая запись медленная
+        func()
+        return type("R", (), {"data": []})()
+    monkeypatch.setattr(sessions, "run_query", run_query)
+
+    async def scenario():
+        first = asyncio.create_task(sessions.revoke_all_tokens([5]))
+        await asyncio.sleep(0.01)
+        await sessions.revoke_all_tokens([5])
+        await first
+    asyncio.run(scenario())
+    final = [r for batch in captured for r in batch if r["user_id"] == 5][-1]["not_before_ms"]
+    assert final == revocation._cutoff_ms[5]
