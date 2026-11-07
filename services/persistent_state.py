@@ -20,6 +20,7 @@
 """
 import asyncio
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -41,20 +42,32 @@ _LOAD_PAGE = 1000
 # Все хранилища: чтобы разом загрузить, почистить и забыть пользователя
 _stores: list = []
 
-# Пользователи, удалившие аккаунт: пока они заново не дадут согласие, в базу
-# не пишется ничего из их диалогов. Обработчик, начатый до удаления (запрос к
-# AI идёт секундами), мог бы, закончив, записать данные о здоровье уже
-# удалённого аккаунта. В памяти работа идёт как обычно.
-_deleted_users: set[int] = set()
+# Пользователи, удалившие аккаунт: в базу не пишется ничего из их диалогов,
+# пока они заново не дадут согласие И не пройдёт DELETE_GUARD_SECONDS после
+# удаления. Обработчик, начатый до удаления (запрос к AI идёт секундами), мог
+# бы, закончив, записать данные о здоровье уже удалённого аккаунта — в том
+# числе если человек сразу же снова согласился. В памяти работа идёт как обычно.
+DELETE_GUARD_SECONDS = 300
+_deleted_users: dict[int, dict] = {}  # user_id -> {"at": monotonic, "reconsented": bool}
 
 
 def clear_user_deleted(user_id: int) -> None:
-    """Пользователь снова дал согласие — его диалоги снова можно сохранять."""
-    _deleted_users.discard(int(user_id))
+    """Пользователь снова дал согласие — после паузы диалоги снова сохраняются."""
+    entry = _deleted_users.get(int(user_id))
+    if entry is not None:
+        entry["reconsented"] = True
 
 
 def _is_deleted(user_id) -> bool:
-    return user_id is not None and int(user_id) in _deleted_users
+    if user_id is None:
+        return False
+    entry = _deleted_users.get(int(user_id))
+    if entry is None:
+        return False
+    if entry["reconsented"] and time.monotonic() - entry["at"] > DELETE_GUARD_SECONDS:
+        _deleted_users.pop(int(user_id), None)
+        return False
+    return True
 
 
 def _now() -> datetime:
@@ -371,7 +384,7 @@ async def purge_old_all() -> None:
 async def forget_user(user_id: int) -> None:
     """Убирает из памяти незавершённые диалоги пользователя и дожидается, пока
     это дойдёт до базы (чтобы фоновая запись не вернула их после удаления)."""
-    _deleted_users.add(int(user_id))
+    _deleted_users[int(user_id)] = {"at": time.monotonic(), "reconsented": False}
     for store in _stores:
         await store.forget_user(user_id)
 

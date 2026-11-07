@@ -352,6 +352,11 @@ def test_dialogs_saved_again_after_new_consent(db, monkeypatch):
             await fsm.wait()
             assert not db.get("fsm_states")
             await consent.record_consent(91, "bot")
+            # сразу после согласия — ещё пауза (старые запросы могли не закончиться)
+            await fsm.set_data(key, {"step": "сразу после согласия"})
+            await fsm.wait()
+            assert not db.get("fsm_states")
+            monkeypatch.setattr(persistent_state, "DELETE_GUARD_SECONDS", -1)
             await fsm.set_data(key, {"step": "после согласия"})
             await fsm.wait()
         finally:
