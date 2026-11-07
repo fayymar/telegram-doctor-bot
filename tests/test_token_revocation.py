@@ -47,6 +47,8 @@ def test_legacy_token_without_jti_is_revoked_by_cutoff():
 class _FakeTable:
     """Таблица Supabase для load_revocations: select/gt/order/range/execute."""
 
+    max_rows = 1000
+
     def __init__(self, rows):
         self.rows, self.lo, self.hi = rows, 0, None
 
@@ -64,9 +66,9 @@ class _FakeTable:
         return self
 
     def execute(self):
-        # как PostgREST: не больше 1000 строк за запрос, даже без range
+        # как PostgREST: не больше max_rows строк за запрос, даже без range
         hi = len(self.rows) if self.hi is None else self.hi + 1
-        return type("R", (), {"data": self.rows[self.lo:min(hi, self.lo + 1000)]})()
+        return type("R", (), {"data": self.rows[self.lo:min(hi, self.lo + self.max_rows)]})()
 
 
 def _fake_revocation_db(monkeypatch, cutoffs=(), tokens=()):
@@ -98,6 +100,19 @@ def test_revocations_load_beyond_row_limit(monkeypatch):
     rows = [{"jti": f"filler{i}", "expires_at": exp} for i in range(2 * sessions._LOAD_PAGE)]
     rows += [{"jti": p["jti"], "expires_at": exp} for p in payloads]
     revocation._reset_for_tests()
+    _fake_revocation_db(monkeypatch, tokens=rows)
+    asyncio.run(sessions.load_revocations())
+    assert all(verify_token(t) is None for t in toks)
+
+
+def test_revocations_load_with_lower_row_limit(monkeypatch):
+    # лимит строк в проекте меньше нашей страницы — всё равно читаем всё
+    toks = [issue_token(5) for _ in range(2)]
+    exp = "2099-01-01T00:00:00+00:00"
+    rows = [{"jti": f"filler{i}", "expires_at": exp} for i in range(700)]
+    rows += [{"jti": decode_token(t)["jti"], "expires_at": exp} for t in toks]
+    revocation._reset_for_tests()
+    monkeypatch.setattr(_FakeTable, "max_rows", 500)
     _fake_revocation_db(monkeypatch, tokens=rows)
     asyncio.run(sessions.load_revocations())
     assert all(verify_token(t) is None for t in toks)

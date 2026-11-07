@@ -80,21 +80,22 @@ async def _flush_pending_locked() -> None:
                 _pending_cutoffs.pop(u, None)
 
 
-_LOAD_PAGE = 1000  # Supabase отдаёт не больше 1000 строк за запрос
+_LOAD_PAGE = 1000  # Supabase по умолчанию отдаёт не больше 1000 строк за запрос
 
 
 async def _load_all(build_query) -> list[dict]:
     """Читает все строки постранично: без этого отзывы сверх лимита строк
-    молча терялись бы при перезапуске."""
+    молча терялись бы при перезапуске. Читаем до пустой страницы, а не до
+    неполной: лимит строк в проекте может быть настроен меньше _LOAD_PAGE."""
     rows: list[dict] = []
     start = 0
     while True:
         page = await run_query(lambda s=start: build_query().range(s, s + _LOAD_PAGE - 1).execute())
         data = page.data or []
-        rows.extend(data)
-        if len(data) < _LOAD_PAGE:
+        if not data:
             return rows
-        start += _LOAD_PAGE
+        rows.extend(data)
+        start += len(data)
 
 
 async def load_revocations() -> None:
