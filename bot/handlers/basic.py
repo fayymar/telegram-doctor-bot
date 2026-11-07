@@ -183,6 +183,31 @@ _FAQ_TEXT = """❓ *F.A.Q.*
 Данные хранятся в зашифрованной базе и не передаются третьим лицам."""
 
 
+@router.callback_query(F.data == "consent:accept")
+async def consent_accept(callback: CallbackQuery):
+    """Пользователь нажал «Согласен» — фиксируем согласие."""
+    from services.consent import record_consent
+    try:
+        await record_consent(callback.from_user.id, "bot")
+    except Exception as e:
+        logger.error(f"Consent save failed for {callback.from_user.id}: {type(e).__name__}")
+        await callback.answer("Не удалось сохранить согласие. Попробуйте ещё раз.", show_alert=True)
+        return
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(
+        "✅ Спасибо! Согласие сохранено.\n\nКак хотите продолжить?",
+        reply_markup=_get_start_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(Command("privacy"))
+async def cmd_privacy(message: Message):
+    """Текст согласия и ссылка на политику конфиденциальности."""
+    from bot.middlewares import send_consent_request
+    await send_consent_request(message)
+
+
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     await message.answer(
@@ -226,11 +251,13 @@ async def back_to_main(message: Message, state: FSMContext):
 @router.message(Command("deletedata"))
 async def cmd_delete_data(message: Message):
     await message.answer(
-        "⚠️ Удалить все ваши данные?\n\n"
+        "⚠️ Удалить все ваши данные и отозвать согласие?\n\n"
         "Будут удалены:\n"
-        "• Профиль и медицинская история\n"
+        "• Профиль и медицинский анамнез\n"
+        "• История консультаций\n"
+        "• Лекарства и дневник здоровья\n"
         "• Показатели здоровья\n"
-        "• История консультаций\n\n"
+        "• Согласие на обработку данных\n\n"
         "Это действие необратимо.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="✅ Да, удалить все данные", callback_data="confirm_delete"),
@@ -240,16 +267,15 @@ async def cmd_delete_data(message: Message):
 
 
 @router.callback_query(F.data == "confirm_delete")
-async def confirm_delete(callback: CallbackQuery):
+async def confirm_delete(callback: CallbackQuery, state: FSMContext):
+    from services.consent import delete_all_user_data
     user_id = callback.from_user.id
+    await state.clear()
     try:
-        await run_query(lambda: supabase_client.table("user_profiles").delete().eq("user_id", user_id).execute())
-        await run_query(lambda: supabase_client.table("health_metrics").delete().eq("user_id", user_id).execute())
-        await run_query(lambda: supabase_client.table("consultations").delete().eq("user_id", user_id).execute())
-        logger.info(f"Deleted all data for user {user_id}")
-        await callback.message.edit_text("✅ Все данные удалены.")
+        await delete_all_user_data(user_id)
+        await callback.message.edit_text("✅ Все данные удалены, согласие отозвано.")
     except Exception as e:
-        logger.error(f"Error deleting user data for {user_id}: {e}")
+        logger.error(f"Error deleting user data for {user_id}: {type(e).__name__}")
         await callback.message.edit_text("❌ Ошибка при удалении. Попробуйте ещё раз.")
     await callback.answer()
 
@@ -263,14 +289,13 @@ async def cancel_delete(callback: CallbackQuery):
 @router.my_chat_member()
 async def on_user_blocked_bot(update: ChatMemberUpdated):
     if update.new_chat_member.status == "kicked":
+        from services.consent import delete_all_user_data
         user_id = update.from_user.id
         try:
-            await run_query(lambda: supabase_client.table("user_profiles").delete().eq("user_id", user_id).execute())
-            await run_query(lambda: supabase_client.table("health_metrics").delete().eq("user_id", user_id).execute())
-            await run_query(lambda: supabase_client.table("consultations").delete().eq("user_id", user_id).execute())
+            await delete_all_user_data(user_id)
             logger.info(f"Deleted all data for user {user_id} (bot blocked)")
         except Exception as e:
-            logger.error(f"Error deleting user data for {user_id}: {e}")
+            logger.error(f"Error deleting user data for {user_id}: {type(e).__name__}")
 
 
 @router.message(Command("profile"))
