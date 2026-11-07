@@ -134,3 +134,39 @@ def test_tokens_issued_before_start_rejected_until_revocations_loaded():
     assert verify_token(fresh) == 5
     asyncio.run(sessions.load_revocations())
     assert verify_token(old) == 5  # отзывов нет — старый токен снова действует
+
+
+def test_failed_persist_is_retried(monkeypatch):
+    calls = {"fail": True, "writes": 0}
+
+    async def flaky_run_query(func, *a, **kw):
+        if calls["fail"]:
+            raise RuntimeError("db down")
+        calls["writes"] += 1
+        return type("R", (), {"data": []})()
+    monkeypatch.setattr(sessions, "run_query", flaky_run_query)
+
+    tok = issue_token(5)
+    try:
+        asyncio.run(sessions.revoke_token(decode_token(tok)))
+    except RuntimeError:
+        pass
+    assert verify_token(tok) is None          # отозван сразу, в памяти
+    assert sessions._pending_tokens           # ждёт записи в базу
+    calls["fail"] = False
+    asyncio.run(sessions._flush_pending())    # фоновый повтор
+    assert not sessions._pending_tokens and calls["writes"] == 1
+
+
+def test_logout_all_reports_failure(monkeypatch):
+    async def failing(*a, **kw):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(sessions, "run_query", failing)
+    t1 = issue_token(5)
+
+    async def t(c):
+        r = await c.post("/api/auth/logout-all", headers={"Authorization": f"Bearer {t1}"})
+        assert r.status == 503
+        r = await c.get("/api/auth/me", headers={"Authorization": f"Bearer {t1}"})
+        assert r.status == 401  # на этом сервере токен уже не действует
+    _run(t)

@@ -21,6 +21,12 @@ REVOCATION_REFRESH_INTERVAL = 600
 REVOCATION_RETRY_INTERVAL = 30  # пока список не загружен — пробуем чаще
 
 
+# Записи об отзыве, которые не удалось сохранить в базу: повторяем в фоне,
+# чтобы отзыв пережил перезапуск сервера
+_pending_tokens: dict[str, float] = {}
+_pending_cutoffs: dict[int, int] = {}
+
+
 def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
@@ -34,11 +40,8 @@ async def revoke_token(payload: dict) -> None:
         return
     exp = float(payload.get("exp") or (revocation.now_ms() / 1000 + _NO_EXP_KEEP))
     revocation.remember_revoked_token(jti, exp)
-    await run_query(
-        lambda: supabase_client.table("revoked_tokens")
-        .upsert({"jti": jti, "expires_at": _iso(exp)}, on_conflict="jti")
-        .execute()
-    )
+    _pending_tokens[jti] = exp
+    await _flush_pending()
 
 
 async def revoke_all_tokens(user_ids: list[int]) -> None:
@@ -46,11 +49,26 @@ async def revoke_all_tokens(user_ids: list[int]) -> None:
     cutoff = revocation.now_ms()
     for uid in user_ids:
         revocation.remember_cutoff(int(uid), cutoff)
-    rows = [{"user_id": int(uid), "not_before_ms": cutoff} for uid in user_ids]
-    if rows:
-        await run_query(
-            lambda: supabase_client.table("token_cutoffs").upsert(rows, on_conflict="user_id").execute()
-        )
+        _pending_cutoffs[int(uid)] = max(cutoff, _pending_cutoffs.get(int(uid), -1))
+    await _flush_pending()
+
+
+async def _flush_pending() -> None:
+    """Сохраняет в базу накопленные отзывы. При ошибке они остаются в очереди
+    (повтор — в revocation_sync_loop), а исключение пробрасывается."""
+    if _pending_tokens:
+        batch = dict(_pending_tokens)
+        rows = [{"jti": j, "expires_at": _iso(e)} for j, e in batch.items()]
+        await run_query(lambda: supabase_client.table("revoked_tokens").upsert(rows, on_conflict="jti").execute())
+        for j in batch:
+            _pending_tokens.pop(j, None)
+    if _pending_cutoffs:
+        batch = dict(_pending_cutoffs)
+        rows = [{"user_id": u, "not_before_ms": c} for u, c in batch.items()]
+        await run_query(lambda: supabase_client.table("token_cutoffs").upsert(rows, on_conflict="user_id").execute())
+        for u, c in batch.items():
+            if _pending_cutoffs.get(u) == c:
+                _pending_cutoffs.pop(u, None)
 
 
 async def load_revocations() -> None:
@@ -72,6 +90,7 @@ async def revocation_sync_loop() -> None:
     """Загружает отзывы при старте и периодически; чистит истёкшие записи."""
     while True:
         try:
+            await _flush_pending()
             await load_revocations()
             revocation.purge_expired()
             now_iso = _iso(revocation.now_ms() / 1000)
@@ -80,4 +99,5 @@ async def revocation_sync_loop() -> None:
             )
         except Exception as e:
             logger.error(f"Token revocation sync failed: {type(e).__name__}")
-        await asyncio.sleep(REVOCATION_REFRESH_INTERVAL if revocation.is_loaded() else REVOCATION_RETRY_INTERVAL)
+        healthy = revocation.is_loaded() and not _pending_tokens and not _pending_cutoffs
+        await asyncio.sleep(REVOCATION_REFRESH_INTERVAL if healthy else REVOCATION_RETRY_INTERVAL)

@@ -1409,7 +1409,7 @@ async def api_auth_logout(request: web.Request) -> web.Response:
         try:
             await revoke_token(payload)
         except Exception as e:
-            # В памяти токен уже отозван; не сохранилось только в базе
+            # В памяти токен уже отозван; сохранение в базу повторится в фоне
             logger.error(f"Logout persist failed: {type(e).__name__}")
     return json_response({"ok": True})
 
@@ -1420,7 +1420,10 @@ async def api_auth_logout_all(request: web.Request) -> web.Response:
     try:
         await revoke_all_tokens([request["user_id"]])
     except Exception as e:
+        # На этом сервере токены уже не действуют; сохранение в базу повторится в фоне,
+        # но сообщаем об ошибке, чтобы пользователь мог повторить
         logger.error(f"Logout-all persist failed: {type(e).__name__}")
+        return json_response({"error": "Service temporarily unavailable"}, status=503)
     return json_response({"ok": True})
 
 

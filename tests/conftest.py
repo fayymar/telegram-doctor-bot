@@ -31,6 +31,8 @@ def _isolated_token_revocation(monkeypatch):
         return type("R", (), {"data": []})()
 
     monkeypatch.setattr(sessions, "run_query", fake_run_query)
+    sessions._pending_tokens.clear()
+    sessions._pending_cutoffs.clear()
     revocation._reset_for_tests()
     yield calls
     revocation._reset_for_tests()
