@@ -62,9 +62,6 @@ def format_phone_number(phone_input: str, default_country: str = "UZ") -> tuple[
         # Форматируем в международный формат
         formatted = phonenumbers.format_number(parsed_number, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
         
-        # Получаем информацию о стране
-        country_code = phonenumbers.region_code_for_number(parsed_number)
-        country_name = get_country_name(country_code)
         
         return True, formatted, None
         
@@ -120,30 +117,6 @@ def get_country_name(country_code: str) -> str:
     }
     
     return countries.get(country_code, country_code)
-
-
-def detect_country_from_number(phone_input: str) -> str | None:
-    """
-    Определяет страну по номеру телефона
-    
-    Args:
-        phone_input: Номер телефона
-    
-    Returns:
-        Optional[str]: ISO код страны или None
-    """
-    try:
-        cleaned = phone_input.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-        if not cleaned.startswith("+"):
-            cleaned = "+" + cleaned
-        
-        parsed = phonenumbers.parse(cleaned, None)
-        if phonenumbers.is_valid_number(parsed):
-            return phonenumbers.region_code_for_number(parsed)
-    except (NumberParseException, ValueError, AttributeError):
-        pass
-    
-    return None
 
 
 def get_phone_info(phone_input: str, default_country: str = "UZ") -> dict:

@@ -6,7 +6,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-import main
+from tests.helpers import api as main, patch_api
 from security.auth import SCOPE_METRICS, issue_token
 
 
@@ -31,11 +31,11 @@ def _app():
 def fake_db(monkeypatch):
     async def fake_run_query(func, *a, **kw):
         return SimpleNamespace(data=[{"full_name": "Test"}])
-    monkeypatch.setattr(main, "run_query", fake_run_query)
+    patch_api(monkeypatch, "run_query", fake_run_query)
 
     async def consent_given(user_id):
         return True
-    monkeypatch.setattr(main, "has_consent", consent_given)
+    patch_api(monkeypatch, "has_consent", consent_given)
     main._rate_counters.clear()
 
 
@@ -82,7 +82,7 @@ def test_metrics_post_requires_token_and_ignores_body_user_id(monkeypatch):
     async def fake_run_query(func, *a, **kw):
         saved["called"] = True
         return SimpleNamespace(data=[])
-    monkeypatch.setattr(main, "run_query", fake_run_query)
+    patch_api(monkeypatch, "run_query", fake_run_query)
 
     async def t(c):
         r = await c.post("/api/health/metrics", json={"user_id": 100, "steps": 5000})
@@ -134,7 +134,7 @@ def test_link_requires_session_and_uses_token_user(monkeypatch):
     async def fake_run_query(func, *a, **kw):
         writes.append(func)
         return SimpleNamespace(data=[])
-    monkeypatch.setattr(main, "run_query", fake_run_query)
+    patch_api(monkeypatch, "run_query", fake_run_query)
 
     async def fake_send(*a, **kw):
         return None
@@ -228,7 +228,7 @@ def test_answers_capped_to_question_count():
 def _no_consent(monkeypatch):
     async def no(user_id):
         return False
-    monkeypatch.setattr(main, "has_consent", no)
+    patch_api(monkeypatch, "has_consent", no)
 
 
 def test_profile_write_requires_consent(monkeypatch):
@@ -265,7 +265,7 @@ def test_consent_post_records_current_version(monkeypatch):
 
     async def fake_record(user_id, source, session_id=None):
         recorded.append((user_id, source))
-    monkeypatch.setattr(main, "record_consent", fake_record)
+    patch_api(monkeypatch, "record_consent", fake_record)
 
     async def t(c):
         h = {"Authorization": f"Bearer {issue_token(100)}"}
@@ -284,7 +284,7 @@ def test_account_delete_uses_token_user(monkeypatch):
 
     async def fake_delete(user_id):
         deleted.append(user_id)
-    monkeypatch.setattr(main, "delete_all_user_data", fake_delete)
+    patch_api(monkeypatch, "delete_all_user_data", fake_delete)
 
     async def t(c):
         r = await c.delete("/api/account")
@@ -311,7 +311,7 @@ def test_consultation_stops_after_consent_withdrawn(monkeypatch):
 def test_account_delete_drops_live_consultation_sessions(monkeypatch):
     async def fake_delete(user_id, include_linked=True):
         return None
-    monkeypatch.setattr(main, "delete_all_user_data", fake_delete)
+    patch_api(monkeypatch, "delete_all_user_data", fake_delete)
     main.consultation_sessions["mine"] = {"user_id": 100, "questions": [], "answers": []}
     main.consultation_sessions["other"] = {"user_id": 200, "questions": [], "answers": []}
 
@@ -325,11 +325,11 @@ def test_account_delete_drops_live_consultation_sessions(monkeypatch):
 def test_guest_consultation_stops_if_consent_not_saved(monkeypatch):
     async def failing_record(*a, **kw):
         raise RuntimeError("db down")
-    monkeypatch.setattr(main, "record_consent", failing_record)
+    patch_api(monkeypatch, "record_consent", failing_record)
 
     def must_not_call(*a, **kw):
         raise AssertionError("AI must not be called without a saved consent")
-    monkeypatch.setattr(main, "check_red_flags", must_not_call)
+    patch_api(monkeypatch, "check_red_flags", must_not_call)
 
     async def t(c):
         r = await c.post("/api/consultation/start",

@@ -108,21 +108,3 @@ def safe_parse_json_array(text: str, default: list | None = None) -> list:
     return result
 
 
-def validate_json_structure(data: dict, required_keys: list[str]) -> bool:
-    """
-    Проверяет что JSON содержит все требуемые ключи
-
-    Args:
-        data: Распарсенный JSON
-        required_keys: Список обязательных ключей
-
-    Returns:
-        True если все ключи присутствуют
-    """
-    missing_keys = [key for key in required_keys if key not in data]
-
-    if missing_keys:
-        logger.warning(f"Missing required keys in JSON: {missing_keys}")
-        return False
-
-    return True

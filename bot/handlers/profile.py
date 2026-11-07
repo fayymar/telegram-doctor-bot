@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from aiogram import Bot, F, Router
+from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
@@ -158,65 +158,6 @@ _SMOKING_BUTTON_MAP = {
     "🚬 Курю": "yes",
     "✅ Бросил(а)": "quit",
 }
-
-
-def build_chronic_reply_keyboard(selected: list) -> ReplyKeyboardMarkup:
-    buttons = []
-    for i in range(0, len(CHRONIC_OPTIONS), 2):
-        row = []
-        for opt in CHRONIC_OPTIONS[i:i + 2]:
-            label = f"✅ {opt}" if opt in selected else opt
-            row.append(KeyboardButton(text=label))
-        buttons.append(row)
-    buttons.append([
-        KeyboardButton(text="🚫 Ничего из этого"),
-        KeyboardButton(text="➡️ Готово"),
-    ])
-    buttons.append([KeyboardButton(text="◀️ Назад")])
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def build_hereditary_reply_keyboard(selected: list) -> ReplyKeyboardMarkup:
-    buttons = []
-    for i in range(0, len(HEREDITARY_OPTIONS), 2):
-        row = []
-        for opt in HEREDITARY_OPTIONS[i:i + 2]:
-            label = f"✅ {opt}" if opt in selected else opt
-            row.append(KeyboardButton(text=label))
-        buttons.append(row)
-    buttons.append([
-        KeyboardButton(text="🚫 Ничего из этого"),
-        KeyboardButton(text="➡️ Готово"),
-    ])
-    buttons.append([KeyboardButton(text="◀️ Назад")])
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def build_allergy_reply_keyboard(selected: list) -> ReplyKeyboardMarkup:
-    buttons = []
-    for i in range(0, len(ALLERGY_OPTIONS), 2):
-        row = []
-        for opt in ALLERGY_OPTIONS[i:i + 2]:
-            label = f"✅ {opt}" if opt in selected else opt
-            row.append(KeyboardButton(text=label))
-        buttons.append(row)
-    buttons.append([
-        KeyboardButton(text="Аллергий нет"),
-        KeyboardButton(text="✏️ Написать своё"),
-    ])
-    buttons.append([KeyboardButton(text="➡️ Готово"), KeyboardButton(text="◀️ Назад")])
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def build_smoking_reply_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[[
-            KeyboardButton(text="🚭 Не курю"),
-            KeyboardButton(text="🚬 Курю"),
-            KeyboardButton(text="✅ Бросил(а)"),
-        ]],
-        resize_keyboard=True,
-    )
 
 
 async def _upsert_profile_with_fallback(profile_data: dict):
@@ -457,8 +398,6 @@ CANCEL_TEXT = "❌ Отмена"
 @router.message(Registration.waiting_for_phone, F.text == BACK_TEXT)
 async def back_to_name(message: Message, state: FSMContext):
     """Назад к вводу ФИО."""
-    data = await state.get_data()
-    lang = data.get("language", "ru")
     await state.set_state(Registration.waiting_for_full_name)
     await message.answer(
         "◀️ Вернулись к шагу 1\n\nВведите ваше ФИО:",
@@ -519,8 +458,6 @@ async def back_to_weight(message: Message, state: FSMContext):
 @router.message(Registration.waiting_for_hereditary, F.text == BACK_TEXT)
 async def back_to_chronic(message: Message, state: FSMContext):
     """Назад к хроническим заболеваниям."""
-    data = await state.get_data()
-    selected = data.get("selected_chronic", [])
     await state.set_state(Registration.waiting_for_chronic)
     await _send_chronic_step(message, state)
 
@@ -529,11 +466,8 @@ async def back_to_chronic(message: Message, state: FSMContext):
 @router.message(Registration.waiting_for_allergies_text, F.text == BACK_TEXT)
 async def back_to_hereditary(message: Message, state: FSMContext):
     """Назад к наследственным заболеваниям."""
-    data = await state.get_data()
-    selected = data.get("selected_hereditary", [])
     await state.set_state(Registration.waiting_for_hereditary)
     await _send_hereditary_step(message, state)
-
 
 
 async def _save_and_finish_registration(message: Message, state: FSMContext):
@@ -592,8 +526,6 @@ async def _save_and_finish_registration(message: Message, state: FSMContext):
 @router.message(Registration.waiting_for_smoking, F.text == BACK_TEXT)
 async def back_to_allergies(message: Message, state: FSMContext):
     """Назад к аллергиям."""
-    data = await state.get_data()
-    selected = data.get("selected_allergies", [])
     await state.set_state(Registration.waiting_for_allergies)
     await _send_allergy_step(message, state)
 
@@ -838,23 +770,6 @@ async def process_weight(message: Message, state: FSMContext):
 
 # ─── Helpers для удаления сообщений ────────────────────────────────────────
 
-async def _try_delete(bot: Bot, message: Message):
-    """Безопасно удаляет сообщение пользователя."""
-    try:
-        await bot.delete_message(message.chat.id, message.message_id)
-    except Exception as e:
-        logger.debug(f"Failed to delete message {message.message_id}: {e}")
-
-
-async def _try_delete_by_id(bot: Bot, chat_id: int, message_id: int):
-    """Безопасно удаляет сообщение по ID."""
-    try:
-        await bot.delete_message(chat_id, message_id)
-    except Exception as e:
-        logger.debug(f"Failed to delete message {message_id} in chat {chat_id}: {e}")
-
-
-
 
 @router.message(Registration.waiting_for_anamnesis_consent, F.text == BACK_TEXT)
 async def back_from_consent(message: Message, state: FSMContext):
@@ -882,15 +797,6 @@ async def handle_anamnesis_consent(message: Message, state: FSMContext):
 
 
 # (старые ReplyKeyboard версии удалены — используются InlineKeyboard выше)
-
-
-async def _send_smoking_step(message: Message, state: FSMContext):
-    await state.set_state(Registration.waiting_for_smoking)
-    await message.answer(
-        "📋 *Медицинская история (шаг 4 из 4)*\n\nВы курите?",
-        reply_markup=build_smoking_reply_keyboard(),
-        parse_mode="Markdown",
-    )
 
 
 # =========================================================
@@ -1030,7 +936,6 @@ NO: привет, тест, 123, рецепт пирога, непонятный
         return ("YES" in resp.upper()), ""
     except Exception:
         return True, ""  # При ошибке AI пропускаем
-
 
 
 @router.callback_query(Registration.waiting_for_chronic, F.data.startswith("chr:"))
@@ -1200,7 +1105,6 @@ async def cb_allergy(call: CallbackQuery, state: FSMContext):
         pass
 
 
-
 # ── Обработчики ручного ввода в анамнезе ────────────────────────────────────
 
 @router.message(Registration.waiting_for_chronic_text, F.text)
@@ -1321,7 +1225,6 @@ async def cb_smoking(call: CallbackQuery, state: FSMContext):
     chronic_list   = data.get("selected_chronic") or []
     hereditary_list = data.get("selected_hereditary") or []
     allergies_str  = ", ".join(data.get("selected_allergies") or [])
-    activity_level = data.get("activity_level", "")
     smoking_value  = val
     is_update = data.get("is_anamnesis_update", False)
 
@@ -1399,7 +1302,6 @@ async def _save_registration_with_anamnesis(
         logger.exception("Profile save error user_id=%s", message.chat.id)
         await message.answer(f"❌ Ошибка сохранения: {str(e)[:300]}\n\nПопробуйте /start")
     await state.clear()
-
 
 
 # =========================================================
