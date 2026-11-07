@@ -20,7 +20,6 @@
 """
 import asyncio
 import json
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -42,24 +41,20 @@ _LOAD_PAGE = 1000
 # Все хранилища: чтобы разом загрузить, почистить и забыть пользователя
 _stores: list = []
 
-# После удаления аккаунта ещё какое-то время не пишем в базу ничего от этого
-# пользователя: обработчик, начатый до удаления (запрос к AI идёт секундами),
-# мог бы, закончив, записать данные о здоровье уже удалённого аккаунта.
-# В памяти работа продолжается как обычно; запись в базу возобновится сама.
-FORGET_GUARD_SECONDS = 600
-_forgotten_at: dict[int, float] = {}
+# Пользователи, удалившие аккаунт: пока они заново не дадут согласие, в базу
+# не пишется ничего из их диалогов. Обработчик, начатый до удаления (запрос к
+# AI идёт секундами), мог бы, закончив, записать данные о здоровье уже
+# удалённого аккаунта. В памяти работа идёт как обычно.
+_deleted_users: set[int] = set()
 
 
-def _recently_forgotten(user_id) -> bool:
-    if user_id is None:
-        return False
-    at = _forgotten_at.get(int(user_id))
-    if at is None:
-        return False
-    if time.monotonic() - at > FORGET_GUARD_SECONDS:
-        _forgotten_at.pop(int(user_id), None)
-        return False
-    return True
+def clear_user_deleted(user_id: int) -> None:
+    """Пользователь снова дал согласие — его диалоги снова можно сохранять."""
+    _deleted_users.discard(int(user_id))
+
+
+def _is_deleted(user_id) -> bool:
+    return user_id is not None and int(user_id) in _deleted_users
 
 
 def _now() -> datetime:
@@ -202,7 +197,7 @@ class DictStore:
 
     def _snapshot(self, rid: str) -> dict | None:
         item = self.items.get(rid)
-        if item is None or _recently_forgotten(self._owner(item)):
+        if item is None or _is_deleted(self._owner(item)):
             return None
         row = self._to_row(rid, item)
         return _jsonable(row) if row is not None else None
@@ -282,7 +277,7 @@ class PersistentMemoryStorage(MemoryStorage):
         record = self.storage.get(key)
         if record is None or (record.state is None and not record.data):
             return None
-        if _recently_forgotten(key.user_id):
+        if _is_deleted(key.user_id):
             return None
         return _jsonable({
             "key": skey,
@@ -357,7 +352,7 @@ async def purge_old_all() -> None:
 async def forget_user(user_id: int) -> None:
     """Убирает из памяти незавершённые диалоги пользователя и дожидается, пока
     это дойдёт до базы (чтобы фоновая запись не вернула их после удаления)."""
-    _forgotten_at[int(user_id)] = time.monotonic()
+    _deleted_users.add(int(user_id))
     for store in _stores:
         await store.forget_user(user_id)
 

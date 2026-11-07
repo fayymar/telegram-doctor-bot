@@ -329,3 +329,32 @@ def test_oversized_session_stays_in_memory_only(db):
     asyncio.run(go())
     assert not db.get("consultation_sessions")
     assert "big" in consultation_sessions
+
+
+def test_dialogs_saved_again_after_new_consent(db, monkeypatch):
+    # после удаления запись в базу выключена, пока человек снова не согласится
+    from services import consent
+    key = StorageKey(bot_id=1, chat_id=91, user_id=91)
+
+    async def fake_has(uid):
+        return False
+
+    async def fake_rq(func, *a, **kw):
+        return SimpleNamespace(data=[])
+    monkeypatch.setattr(consent, "has_consent", fake_has)
+    monkeypatch.setattr(consent, "run_query", fake_rq)
+
+    async def go():
+        fsm = PersistentMemoryStorage()
+        try:
+            await persistent_state.forget_user(91)
+            await fsm.set_data(key, {"step": "до согласия"})
+            await fsm.wait()
+            assert not db.get("fsm_states")
+            await consent.record_consent(91, "bot")
+            await fsm.set_data(key, {"step": "после согласия"})
+            await fsm.wait()
+        finally:
+            persistent_state._stores.remove(fsm)
+    asyncio.run(go())
+    assert [r["data"] for r in db["fsm_states"]] == [{"step": "после согласия"}]

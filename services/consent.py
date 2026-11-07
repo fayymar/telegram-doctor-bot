@@ -90,6 +90,9 @@ async def record_consent(user_id: int | None, source: str, session_id: str | Non
     # Если параллельно шло удаление данных, строка могла быть уже стёрта — не кэшируем
     if user_id is not None and _deletions == started_at:
         _remember(user_id, CONSENT_VERSION)
+        # снова дал согласие после удаления аккаунта — диалоги снова сохраняются
+        from services.persistent_state import clear_user_deleted
+        clear_user_deleted(user_id)
     logger.info(f"Consent {CONSENT_VERSION} recorded: user={user_id} source={source}")
 
 

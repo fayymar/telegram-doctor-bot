@@ -34,7 +34,7 @@ def _isolated_token_revocation(monkeypatch):
     # Незавершённые диалоги: без базы и с чистым состоянием
     from services import persistent_state
     monkeypatch.setattr(persistent_state, "run_query", fake_run_query)
-    persistent_state._forgotten_at.clear()
+    persistent_state._deleted_users.clear()
     for store in persistent_state._stores:
         store._writer._dirty.clear()
         store._writer._tasks.clear()
