@@ -90,8 +90,9 @@ async def record_consent(user_id: int | None, source: str, session_id: str | Non
     logger.info(f"Consent {CONSENT_VERSION} recorded: user={user_id} source={source}")
 
 
-# Таблицы с данными пользователя. user_profiles — последней (на неё ссылаются FK).
-_USER_TABLES = ("messages", "consultations", "medications", "health_diary", "health_metrics", "consents", "user_profiles")
+# Таблицы с данными пользователя. consents — первой: с этого момента проверки согласия сразу отказывают;
+# user_profiles — последней (на неё ссылаются FK).
+_USER_TABLES = ("consents", "messages", "consultations", "medications", "health_diary", "health_metrics", "user_profiles")
 
 
 async def _linked_user_ids(user_id: int) -> list[int]:
