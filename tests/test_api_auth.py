@@ -17,6 +17,8 @@ def _app():
     app.router.add_post("/api/auth/code", main.api_auth_code)
     app.router.add_post("/api/auth/link", main.api_auth_link)
     app.router.add_post("/api/consultation/answer", main.api_consultation_answer)
+    app.router.add_post("/api/consultation/duration", main.api_consultation_duration)
+    app.router.add_post("/api/consultation/result", main.api_consultation_result)
     app.router.add_post("/api/consultation/start", main.api_consultation_start)
     app.router.add_post("/api/profile/{user_id}", main.api_profile_post)
     app.router.add_get("/api/consent", main.api_consent_get)
@@ -302,5 +304,5 @@ def test_consultation_stops_after_consent_withdrawn(monkeypatch):
         auth = {"Authorization": f"Bearer {issue_token(100)}"}
         for path in ("/api/consultation/answer", "/api/consultation/duration", "/api/consultation/result"):
             r = await c.post(path, json={"session_id": "s3", "answers": [], "duration": "1 день"}, headers=auth)
-            assert r.status == 403, path
+            assert r.status == 403, (path, r.status, await r.text())
     run(t)
