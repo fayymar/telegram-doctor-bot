@@ -17,6 +17,13 @@ def _app():
     app.router.add_post("/api/auth/code", main.api_auth_code)
     app.router.add_post("/api/auth/link", main.api_auth_link)
     app.router.add_post("/api/consultation/answer", main.api_consultation_answer)
+    app.router.add_post("/api/consultation/duration", main.api_consultation_duration)
+    app.router.add_post("/api/consultation/result", main.api_consultation_result)
+    app.router.add_post("/api/consultation/start", main.api_consultation_start)
+    app.router.add_post("/api/profile/{user_id}", main.api_profile_post)
+    app.router.add_get("/api/consent", main.api_consent_get)
+    app.router.add_post("/api/consent", main.api_consent_post)
+    app.router.add_delete("/api/account", main.api_account_delete)
     return app
 
 
@@ -25,6 +32,10 @@ def fake_db(monkeypatch):
     async def fake_run_query(func, *a, **kw):
         return SimpleNamespace(data=[{"full_name": "Test"}])
     monkeypatch.setattr(main, "run_query", fake_run_query)
+
+    async def consent_given(user_id):
+        return True
+    monkeypatch.setattr(main, "has_consent", consent_given)
     main._rate_counters.clear()
 
 
@@ -210,4 +221,118 @@ def test_answers_capped_to_question_count():
         assert len(main.consultation_sessions["s2"]["answers"]) == 1
         r = await c.post("/api/consultation/answer", json={"session_id": "s2", "answers": "x" * 100})
         assert r.status == 400
+    run(t)
+
+
+
+def _no_consent(monkeypatch):
+    async def no(user_id):
+        return False
+    monkeypatch.setattr(main, "has_consent", no)
+
+
+def test_profile_write_requires_consent(monkeypatch):
+    _no_consent(monkeypatch)
+
+    async def t(c):
+        r = await c.post("/api/profile/100", json={"full_name": "X"},
+                         headers={"Authorization": f"Bearer {issue_token(100)}"})
+        assert r.status == 403 and (await r.json())["error"] == "consent_required"
+    run(t)
+
+
+def test_metrics_write_requires_consent(monkeypatch):
+    _no_consent(monkeypatch)
+
+    async def t(c):
+        tok = issue_token(100, scope=SCOPE_METRICS, ttl=None)
+        r = await c.post("/api/health/metrics", json={"token": tok, "steps": 100})
+        assert r.status == 403
+    run(t)
+
+
+def test_guest_consultation_requires_consent_version():
+    async def t(c):
+        r = await c.post("/api/consultation/start", json={"symptoms": "болит голова"})
+        assert r.status == 403 and (await r.json())["error"] == "consent_required"
+        r = await c.post("/api/consultation/start", json={"symptoms": "болит голова", "consent_version": "old"})
+        assert r.status == 403
+    run(t)
+
+
+def test_consent_post_records_current_version(monkeypatch):
+    recorded = []
+
+    async def fake_record(user_id, source, session_id=None):
+        recorded.append((user_id, source))
+    monkeypatch.setattr(main, "record_consent", fake_record)
+
+    async def t(c):
+        h = {"Authorization": f"Bearer {issue_token(100)}"}
+        r = await c.post("/api/consent", json={"version": "old", "source": "web"}, headers=h)
+        assert r.status == 409
+        r = await c.post("/api/consent", json={"version": main.CONSENT_VERSION, "source": "miniapp"}, headers=h)
+        assert r.status == 200
+        assert recorded == [(100, "miniapp")]
+        r = await c.post("/api/consent", json={"version": main.CONSENT_VERSION})
+        assert r.status == 401
+    run(t)
+
+
+def test_account_delete_uses_token_user(monkeypatch):
+    deleted = []
+
+    async def fake_delete(user_id):
+        deleted.append(user_id)
+    monkeypatch.setattr(main, "delete_all_user_data", fake_delete)
+
+    async def t(c):
+        r = await c.delete("/api/account")
+        assert r.status == 401
+        r = await c.delete("/api/account", headers={"Authorization": f"Bearer {issue_token(100)}"})
+        assert r.status == 200 and deleted == [100]
+    run(t)
+
+
+def test_consultation_stops_after_consent_withdrawn(monkeypatch):
+    # согласие было при старте, затем пользователь удалил данные посреди консультации
+    _no_consent(monkeypatch)
+    main.consultation_sessions["s3"] = {"user_id": 100, "questions": [], "answers": [],
+                                        "symptoms": "x", "duration": None}
+
+    async def t(c):
+        auth = {"Authorization": f"Bearer {issue_token(100)}"}
+        for path in ("/api/consultation/answer", "/api/consultation/duration", "/api/consultation/result"):
+            r = await c.post(path, json={"session_id": "s3", "answers": [], "duration": "1 день"}, headers=auth)
+            assert r.status == 403, (path, r.status, await r.text())
+    run(t)
+
+
+def test_account_delete_drops_live_consultation_sessions(monkeypatch):
+    async def fake_delete(user_id, include_linked=True):
+        return None
+    monkeypatch.setattr(main, "delete_all_user_data", fake_delete)
+    main.consultation_sessions["mine"] = {"user_id": 100, "questions": [], "answers": []}
+    main.consultation_sessions["other"] = {"user_id": 200, "questions": [], "answers": []}
+
+    async def t(c):
+        r = await c.delete("/api/account", headers={"Authorization": f"Bearer {issue_token(100)}"})
+        assert r.status == 200
+    run(t)
+    assert "mine" not in main.consultation_sessions and "other" in main.consultation_sessions
+
+
+def test_guest_consultation_stops_if_consent_not_saved(monkeypatch):
+    async def failing_record(*a, **kw):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(main, "record_consent", failing_record)
+
+    def must_not_call(*a, **kw):
+        raise AssertionError("AI must not be called without a saved consent")
+    monkeypatch.setattr(main, "check_red_flags", must_not_call)
+
+    async def t(c):
+        r = await c.post("/api/consultation/start",
+                         json={"symptoms": "болит голова", "consent_version": main.CONSENT_VERSION})
+        assert r.status == 503
     run(t)

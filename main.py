@@ -24,9 +24,10 @@ from bot.handlers import (
     profile,
     specialists,
 )
-from bot.middlewares import FSMTimeoutMiddleware
+from bot.middlewares import ConsentMiddleware, FSMTimeoutMiddleware
 from config import BOT_TOKEN
 from database.connection import run_query, supabase_client
+from services.consent import CONSENT_VERSION, delete_all_user_data, has_consent, record_consent
 from services.consultation_agent import (
     check_red_flags,
     get_anamnesis_questions,
@@ -66,6 +67,9 @@ dp = Dispatcher()
 # Регистрация middleware
 dp.message.middleware(FSMTimeoutMiddleware())
 dp.callback_query.middleware(FSMTimeoutMiddleware())
+# Согласие на обработку данных — до любых обработчиков, собирающих данные о здоровье
+dp.message.outer_middleware(ConsentMiddleware())
+dp.callback_query.outer_middleware(ConsentMiddleware())
 
 # Регистрация роутеров (ПОРЯДОК ВАЖЕН!)
 dp.include_router(basic.router)        # Базовые команды (/start, /help)
@@ -156,7 +160,7 @@ def _get_cors_headers(request: web.Request) -> dict:
     allowed = origin if origin in ALLOWED_ORIGINS else "https://sympto-med-app.vercel.app"
     return {
         "Access-Control-Allow-Origin": allowed,
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization",
         "Vary": "Origin",
     }
@@ -205,6 +209,37 @@ def auth_required(handler):
             except ValueError:
                 return json_response({"error": "invalid user_id"}, status=400)
         request["user_id"] = uid
+        return await handler(request)
+    return wrapper
+
+
+async def _consent_withdrawn(session: dict) -> bool:
+    """
+    Согласие вошедшего пользователя проверено при старте консультации. Если он
+    отозвал его (удалил данные) посреди консультации — не продолжаем обработку
+    и не сохраняем результат.
+    """
+    user_id = session.get("user_id")
+    return bool(user_id) and not await has_consent(user_id)
+
+
+def _consent_required_response() -> web.Response:
+    return json_response({"error": "consent_required", "consent_version": CONSENT_VERSION}, status=403)
+
+
+def consent_required(handler):
+    """
+    Применяется под @auth_required: без согласия на обработку данных о здоровье
+    (текущей версии) запись данных запрещена — ответ 403 consent_required.
+    """
+    @functools.wraps(handler)
+    async def wrapper(request: web.Request) -> web.Response:
+        try:
+            if not await has_consent(request["user_id"]):
+                return _consent_required_response()
+        except Exception as e:
+            logger.error(f"Consent check failed: {type(e).__name__}")
+            return json_response({"error": "Internal server error"}, status=500)
         return await handler(request)
     return wrapper
 
@@ -280,6 +315,28 @@ async def api_consultation_start(request: web.Request) -> web.Response:
     if len(symptoms) > 2000:
         return json_response({"error": "Symptoms text is too long (max 2000 chars)"}, status=400)
 
+    # Согласие на обработку данных о здоровье: у вошедшего пользователя — из базы,
+    # у гостя — подтверждение текущей версии текста в самом запросе (галочка).
+    guest_consent = False
+    if user_id:
+        if not await has_consent(user_id):
+            return _consent_required_response()
+    elif body.get("consent_version") == CONSENT_VERSION:
+        guest_consent = True
+    else:
+        return _consent_required_response()
+
+    session_id = str(uuid.uuid4())
+    # Согласие гостя записываем ДО отправки симптомов в AI: без сохранённой
+    # записи о согласии консультацию не начинаем
+    if guest_consent:
+        source = body.get("consent_source") if body.get("consent_source") in ("web", "miniapp") else "web"
+        try:
+            await record_consent(None, source, session_id=session_id)
+        except Exception as e:
+            logger.error(f"Guest consent save failed: {type(e).__name__}")
+            return json_response({"error": "Service temporarily unavailable"}, status=503)
+
     # Получаем профиль пользователя из Supabase (только если есть user_id)
     user_profile = {}
     patient_history = []
@@ -317,7 +374,6 @@ async def api_consultation_start(request: web.Request) -> web.Response:
             "message": "Похоже, это не описание симптомов. Опишите, что вас беспокоит (например: болит голова, температура, кашель).",
         }, status=422)
 
-    session_id = str(uuid.uuid4())
     # Ограничиваем число сессий в памяти: при переполнении удаляем самые старые
     if len(consultation_sessions) >= _MAX_CONSULTATION_SESSIONS:
         oldest = sorted(consultation_sessions, key=lambda k: consultation_sessions[k].get("_created_at"))
@@ -375,6 +431,8 @@ async def api_consultation_answer(request: web.Request) -> web.Response:
     session = _get_owned_session(request, session_id)
     if not session:
         return json_response({"error": "Session not found"}, status=404)
+    if await _consent_withdrawn(session):
+        return _consent_required_response()
 
     try:
         answers = body.get("answers", [])
@@ -414,6 +472,8 @@ async def api_consultation_duration(request: web.Request) -> web.Response:
     session = _get_owned_session(request, session_id)
     if not session:
         return json_response({"error": "Session not found"}, status=404)
+    if await _consent_withdrawn(session):
+        return _consent_required_response()
     if _is_rate_limited(request, "ai", limit=10, window=60):
         return _rate_limit_response()
 
@@ -450,6 +510,8 @@ async def api_consultation_result(request: web.Request) -> web.Response:
     session = _get_owned_session(request, session_id)
     if not session:
         return json_response({"error": "Session not found"}, status=404)
+    if await _consent_withdrawn(session):
+        return _consent_required_response()
     if _is_rate_limited(request, "ai", limit=10, window=60):
         return _rate_limit_response()
 
@@ -564,6 +626,7 @@ async def api_profile_get(request: web.Request) -> web.Response:
 
 
 @auth_required
+@consent_required
 async def api_profile_post(request: web.Request) -> web.Response:
     """POST /api/profile/{user_id} — upsert в таблицу user_profiles по user_id"""
     user_id = request["user_id"]
@@ -639,6 +702,8 @@ async def api_health_heartrate(request: web.Request) -> web.Response:
     user_id = await _metrics_user_id(request, data)
     if user_id is None:
         return _unauthorized()
+    if not await has_consent(user_id):
+        return _consent_required_response()
 
     try:
         hr = float(data.get('heartrate'))
@@ -829,6 +894,8 @@ async def api_health_metrics_post(request: web.Request) -> web.Response:
     user_id = await _metrics_user_id(request, data)
     if user_id is None:
         return _unauthorized()
+    if not await has_consent(user_id):
+        return _consent_required_response()
     timestamp = data.get('timestamp') or datetime.now(timezone.utc).isoformat()
 
     # Если передан часовой пояс (формат "+05:00") — конвертируем timestamp в UTC
@@ -905,6 +972,7 @@ async def api_health_metrics_post(request: web.Request) -> web.Response:
 
 
 @auth_required
+@consent_required
 async def api_health_metrics_report(request: web.Request) -> web.Response:
     """POST /api/health/metrics/report/{user_id} — ручной отчёт о последних метриках"""
     user_id = request["user_id"]
@@ -1280,6 +1348,7 @@ _LINK_MERGE_FIELDS = [
 
 
 @auth_required
+@consent_required
 async def api_auth_link(request: web.Request) -> web.Response:
     """
     POST /api/auth/link {"code": "K7RM-4QXA"} — привязать Telegram к ТЕКУЩЕМУ
@@ -1335,6 +1404,53 @@ async def api_auth_metrics_token(request: web.Request) -> web.Response:
     """
     token = issue_token(request["user_id"], scope=SCOPE_METRICS, ttl=180 * 24 * 3600)
     return json_response({"token": token, "expires_in": 180 * 24 * 3600})
+
+
+@auth_required
+async def api_consent_get(request: web.Request) -> web.Response:
+    """GET /api/consent — дал ли пользователь согласие на текущую версию текста."""
+    try:
+        accepted = await has_consent(request["user_id"])
+    except Exception as e:
+        logger.error(f"Consent GET failed: {type(e).__name__}")
+        return json_response({"error": "Internal server error"}, status=500)
+    return json_response({"accepted": accepted, "version": CONSENT_VERSION})
+
+
+@auth_required
+async def api_consent_post(request: web.Request) -> web.Response:
+    """POST /api/consent {"version", "source": "web"|"miniapp"} — фиксирует согласие."""
+    if _is_rate_limited(request, "consent", limit=10, window=60):
+        return _rate_limit_response()
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({"error": "Invalid JSON"}, status=400)
+    if not isinstance(body, dict) or body.get("version") != CONSENT_VERSION:
+        return json_response({"error": "outdated_consent_version", "version": CONSENT_VERSION}, status=409)
+    source = body.get("source") if body.get("source") in ("web", "miniapp") else "web"
+    try:
+        await record_consent(request["user_id"], source)
+    except Exception as e:
+        logger.error(f"Consent POST failed: {type(e).__name__}")
+        return json_response({"error": "Internal server error"}, status=500)
+    return json_response({"accepted": True, "version": CONSENT_VERSION})
+
+
+@auth_required
+async def api_account_delete(request: web.Request) -> web.Response:
+    """DELETE /api/account — удаляет все данные пользователя и отзывает согласие."""
+    user_id = request["user_id"]
+    # Незавершённые консультации в памяти тоже содержат данные о здоровье
+    for sid, session in list(consultation_sessions.items()):
+        if session.get("user_id") == user_id:
+            consultation_sessions.pop(sid, None)
+    try:
+        await delete_all_user_data(user_id)
+    except Exception as e:
+        logger.error(f"Account delete failed: {type(e).__name__}")
+        return json_response({"error": "Internal server error"}, status=500)
+    return json_response({"deleted": True})
 
 
 async def cleanup_stale_sessions():
@@ -1467,6 +1583,9 @@ async def start_web_server():
         app.router.add_get('/api/auth/metrics-token', api_auth_metrics_token)
         app.router.add_post('/api/auth/code', api_auth_code)
         app.router.add_post('/api/auth/link', api_auth_link)
+        app.router.add_get('/api/consent', api_consent_get)
+        app.router.add_post('/api/consent', api_consent_post)
+        app.router.add_delete('/api/account', api_account_delete)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -1492,6 +1611,7 @@ async def start_web_server():
 
 
 @auth_required
+@consent_required
 async def api_medications_post(request: web.Request) -> web.Response:
     """POST /api/medications/{user_id} — добавить лекарство"""
     user_id = request["user_id"]
@@ -1522,6 +1642,7 @@ async def api_medications_post(request: web.Request) -> web.Response:
 
 
 @auth_required
+@consent_required
 async def api_diary_post(request: web.Request) -> web.Response:
     """POST /api/diary/{user_id} — добавить запись дневника"""
     user_id = request["user_id"]
