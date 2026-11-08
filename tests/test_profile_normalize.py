@@ -148,3 +148,12 @@ def test_profile_post_invalid_field_400(monkeypatch):
     status, data, upserts = _post(monkeypatch, {"smoking": "иногда"})
     assert status == 400 and data == {"error": "invalid_field", "field": "smoking"}
     assert upserts == []
+
+
+def test_bot_profile_markdown_escaping():
+    """Имя или аллергия с «_» или «*» с сайта не должны ломать сообщение профиля в боте."""
+    from bot.handlers.profile import _md
+    assert _md("Ivan_Petrov*") == "Ivan\\_Petrov\\*"
+    assert _md("[латекс]`") == "\\[латекс]\\`"
+    assert _md(None) == "не указано" and _md("  ") == "не указано"
+    assert _md("Иван") == "Иван"
