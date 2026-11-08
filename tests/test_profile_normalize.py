@@ -157,6 +157,7 @@ def test_bot_profile_markdown_escaping():
     assert _md("[латекс]`") == "\\[латекс]\\`"
     assert _md(None) == "не указано" and _md("  ") == "не указано"
     assert _md("Иван") == "Иван"
+    assert _md("a\\*b\\_") == "a/\\*b/\\_"  # «\» не отменяет экранирование
 
 
 def test_bot_profile_fits_telegram_limit():

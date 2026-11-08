@@ -73,6 +73,8 @@ def _md(value, default: str = "не указано", limit: int = 400) -> str:
     text = str(value)
     if len(text) > limit:
         text = text[:limit].rstrip() + "…"
+    # Обратную косую черту заменяем: перед «_» или «*» она отменила бы наше экранирование
+    text = text.replace("\\", "/")
     return re.sub(r"([_*`\[])", r"\\\1", text)
 
 
