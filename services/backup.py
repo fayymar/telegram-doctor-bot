@@ -236,7 +236,9 @@ async def run_backup(cfg: dict, r2: R2 | None = None) -> str:
 
 
 async def _last_backup_time(r2: R2) -> datetime | None:
-    times = [t for t in (_key_time(k) for k in await r2.list(PREFIX)) if t]
+    # Имена «из будущего» не считаем: иначе один такой файл остановил бы копирование
+    limit = datetime.now(timezone.utc) + timedelta(minutes=10)
+    times = [t for t in (_key_time(k) for k in await r2.list(PREFIX)) if t and t <= limit]
     return max(times) if times else None
 
 

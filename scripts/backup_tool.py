@@ -35,7 +35,13 @@ def decrypt_file(blob_path: str, private_path: str, out_path: str | None) -> Non
     private = Path(private_path).read_text().strip()
     data = gzip.decompress(decrypt(Path(blob_path).read_bytes(), private))
     if out_path:
-        Path(out_path).write_bytes(data)
+        # Медицинские данные: файл только для владельца, существующий не трогаем
+        try:
+            fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            sys.exit(f"{out_path} уже существует — не перезаписываю")
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
         print(f"Готово: {out_path}")
     else:
         sys.stdout.write(data.decode())

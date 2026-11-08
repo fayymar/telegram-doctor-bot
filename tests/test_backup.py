@@ -206,6 +206,9 @@ def test_backup_tool_keygen_and_decrypt(tmp_path, capsys):
     out = tmp_path / "out.json"
     backup_tool.main(["decrypt", str(blob), str(key_file), str(out)])
     assert json.loads(out.read_text()) == {"ok": 1}
+    assert (out.stat().st_mode & 0o777) == 0o600
+    with pytest.raises(SystemExit):
+        backup_tool.main(["decrypt", str(blob), str(key_file), str(out)])  # не перезаписывает
     with pytest.raises(SystemExit):
         backup_tool.main(["keygen", str(key_file)])  # не перезаписывает ключ
 
@@ -230,3 +233,12 @@ def test_dump_auth_users_stops_on_short_page(monkeypatch):
     users = asyncio.run(backup._dump_auth_users())
     assert [u["id"] for u in users] == ["1", "2", "3"]
     assert calls == [1, 2]
+
+
+def test_last_backup_time_ignores_future_names():
+    now = datetime.now(timezone.utc)
+    fmt = "%Y-%m-%dT%H-%M-%SZ"
+    past = f"backups/{(now - timedelta(hours=30)).strftime(fmt)}.json.gz.enc"
+    future = f"backups/{(now + timedelta(days=365)).strftime(fmt)}.json.gz.enc"
+    last = asyncio.run(backup._last_backup_time(FakeR2([past, future])))
+    assert last == backup._key_time(past)
