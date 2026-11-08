@@ -77,6 +77,7 @@ python main.py
 | `SUPABASE_URL`, `SUPABASE_KEY` | проект Supabase; ключ **service_role**, не anon |
 | `SESSION_SECRET` | необязательно: секрет подписи токенов (по умолчанию выводится из `BOT_TOKEN`) |
 | `PORT`, `DEBUG`, `FSM_TIMEOUT`, `LOG_DIR` | необязательные настройки |
+| `R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `BACKUP_PUBLIC_KEY`, `BACKUP_KEEP_DAYS` | необязательно: резервные копии в Cloudflare R2 (см. ниже) |
 
 ## База данных
 
@@ -89,6 +90,24 @@ python main.py
 или консультации в боте) хранятся в памяти и дублируются в базу (`013_persist_sessions.sql`,
 `services/persistent_state.py`), поэтому переживают перезапуск сервера. Записи старше суток
 удаляются автоматически. Гостевые консультации в базу не пишутся.
+
+### Резервные копии
+
+Раз в сутки бот выгружает постоянные таблицы и список входов Supabase Auth, сжимает,
+шифрует открытым ключом (X25519 + AES-256-GCM) и кладёт в бакет Cloudflare R2
+(`services/backup.py`). Ключ для расшифровки на сервере не хранится. Копии старше
+`BACKUP_KEEP_DAYS` дней (по умолчанию 30) удаляются после успешной загрузки новой.
+Без переменных `R2_*` и `BACKUP_PUBLIC_KEY` копирование выключено.
+
+Настройка:
+1. В Cloudflare → R2 создать бакет с юрисдикцией EU и API-токен «Object Read & Write»
+   только для этого бакета. `R2_ENDPOINT` — `https://<account_id>.eu.r2.cloudflarestorage.com`.
+2. На своём компьютере: `python scripts/backup_tool.py keygen backup-private.key`.
+   Файл ключа сохранить надёжно (без него копии не расшифровать), открытый ключ — в
+   `BACKUP_PUBLIC_KEY`.
+
+Восстановление: скачать файл из R2 и выполнить
+`python scripts/backup_tool.py decrypt <файл> backup-private.key backup.json`.
 
 ## Тесты
 
