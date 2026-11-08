@@ -1,4 +1,3 @@
-import re
 from datetime import datetime
 
 from aiogram import F, Router
@@ -28,6 +27,7 @@ from bot.states import EditProfile, Registration
 from database.connection import run_query, supabase_client
 from services.phone_formatter import format_phone_number, get_phone_info
 from utils.logger import setup_logger
+from utils.markdown import escape_markdown
 from utils.validators import (
     sanitize_text,
     validate_age_or_birthdate,
@@ -73,9 +73,8 @@ def _md(value, default: str = "не указано", limit: int = 400) -> str:
     text = str(value)
     if len(text) > limit:
         text = text[:limit].rstrip() + "…"
-    # Обратную косую черту заменяем: перед «_» или «*» она отменила бы наше экранирование
-    text = text.replace("\\", "/")
-    return re.sub(r"([_*`\[])", r"\\\1", text)
+    # Обратную косую черту заменяем: экранирование не должно зависеть от соседних символов
+    return escape_markdown(text.replace("\\", "/"))
 
 
 def _format_birthdate_and_age(birthdate_value):
