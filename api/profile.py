@@ -105,7 +105,9 @@ def _string_list(value, field: str) -> list[str]:
         item = re.sub(r"^[^\w(]+", "", item).strip()[:_MAX_ITEM_LEN]  # без значков в начале
         if item and item.lower() not in _NONE_ITEMS and item not in items:
             items.append(item)
-    return items[:_MAX_LIST_ITEMS]
+            if len(items) >= _MAX_LIST_ITEMS:  # дальше не разбираем: защита от огромных списков
+                break
+    return items
 
 
 def _code(value, field: str, codes: set[str], labels: dict[str, str]) -> str | None:

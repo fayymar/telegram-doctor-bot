@@ -88,6 +88,16 @@ def test_list_limits():
     assert len(normalize_profile({"hereditary": ["x" * 1000]})["hereditary"][0]) == 200
 
 
+def test_huge_list_is_cheap():
+    """Огромный список (тело до 1 МБ) не должен разбираться целиком."""
+    import time
+    huge = ",".join(f"item{i}" for i in range(150_000))
+    started = time.monotonic()
+    assert len(normalize_profile({"chronic_diseases": huge})["chronic_diseases"]) == 30
+    assert len(normalize_profile({"hereditary": huge.split(",")})["hereditary"]) == 30
+    assert time.monotonic() - started < 1
+
+
 def _post(monkeypatch, body):
     saved = []
 
