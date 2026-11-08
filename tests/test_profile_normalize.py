@@ -95,6 +95,8 @@ def test_huge_list_is_cheap():
     started = time.monotonic()
     assert len(normalize_profile({"chronic_diseases": huge})["chronic_diseases"]) == 30
     assert len(normalize_profile({"hereditary": huge.split(",")})["hereditary"]) == 30
+    # Повторы и «нет» тоже не заставляют разбирать весь запрос
+    assert normalize_profile({"hereditary": ["нет"] * 150_000 + ["Диабет"]})["hereditary"] == []
     assert time.monotonic() - started < 1
 
 

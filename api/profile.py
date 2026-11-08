@@ -63,6 +63,7 @@ _ACTIVITY_LABELS = {
 _GENDER_LABELS = {"male": "male", "female": "female", "мужской": "male", "женский": "female"}
 _NONE_ITEMS = {"нет", "ничего", "не знаю"}
 _MAX_LIST_ITEMS = 30
+_MAX_INPUT_ITEMS = 200
 _MAX_ITEM_LEN = 200
 _MAX_TEXT_LEN = 1000
 
@@ -99,10 +100,12 @@ def _string_list(value, field: str) -> list[str]:
     if not isinstance(value, list):
         raise _InvalidField(field)
     items: list[str] = []
-    for item in value:
+    # Разбираем не больше _MAX_INPUT_ITEMS элементов и не больше 1000 символов
+    # каждого: объём работы ограничен независимо от размера запроса
+    for item in value[:_MAX_INPUT_ITEMS]:
         if not isinstance(item, str):
             raise _InvalidField(field)
-        item = re.sub(r"^[^\w(]+", "", item).strip()[:_MAX_ITEM_LEN]  # без значков в начале
+        item = re.sub(r"^[^\w(]+", "", item[:1000]).strip()[:_MAX_ITEM_LEN]  # без значков в начале
         if item and item.lower() not in _NONE_ITEMS and item not in items:
             items.append(item)
             if len(items) >= _MAX_LIST_ITEMS:  # дальше не разбираем: защита от огромных списков
