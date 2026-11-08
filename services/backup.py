@@ -158,14 +158,20 @@ async def _dump_auth_users() -> list[dict]:
     """Входы Supabase Auth: id, почта, способ входа — чтобы восстановить привязку
     аккаунтов. Паролей API не отдаёт (и не должно)."""
     users: list[dict] = []
+    seen: set[str] = set()
     page = 1
     while True:
         batch = await run_query(supabase_client.auth.admin.list_users, page=page, per_page=_PAGE)
         if not batch:
             return users
-        if page > 1000:  # защита от бесконечного цикла, если API игнорирует page
+        # Сервер может отдавать меньше per_page, поэтому идём до пустой страницы.
+        # Если страница не дала ни одного нового входа, API игнорирует page —
+        # останавливаемся с ошибкой, чтобы не зациклиться и не выдать неполную копию.
+        new = [u for u in batch if str(u.id) not in seen]
+        if not new or page > 10_000:
             raise RuntimeError("auth users pagination did not terminate")
-        for u in batch:
+        for u in new:
+            seen.add(str(u.id))
             users.append({
                 "id": str(u.id),
                 "email": getattr(u, "email", None),
@@ -173,8 +179,6 @@ async def _dump_auth_users() -> list[dict]:
                 "created_at": str(getattr(u, "created_at", "") or ""),
                 "providers": (getattr(u, "app_metadata", None) or {}).get("providers"),
             })
-        if len(batch) < _PAGE:
-            return users
         page += 1
 
 

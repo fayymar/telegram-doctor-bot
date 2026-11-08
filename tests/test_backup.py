@@ -213,7 +213,7 @@ def test_backup_tool_keygen_and_decrypt(tmp_path, capsys):
         backup_tool.main(["keygen", str(key_file)])  # не перезаписывает ключ
 
 
-def test_dump_auth_users_stops_on_short_page(monkeypatch):
+def test_dump_auth_users_pages_until_empty(monkeypatch):
     monkeypatch.setattr(backup, "_PAGE", 2)
     User = type("U", (), {})
 
@@ -222,7 +222,7 @@ def test_dump_auth_users_stops_on_short_page(monkeypatch):
         u.id, u.email, u.phone, u.created_at, u.app_metadata = i, f"{i}@x", None, "", {"providers": ["email"]}
         return u
 
-    pages = [[user(1), user(2)], [user(3)]]
+    pages = [[user(1), user(2)], [user(3)], []]
     calls = []
 
     async def fake_run_query(func, *a, **kw):
@@ -232,7 +232,15 @@ def test_dump_auth_users_stops_on_short_page(monkeypatch):
     monkeypatch.setattr(backup, "run_query", fake_run_query)
     users = asyncio.run(backup._dump_auth_users())
     assert [u["id"] for u in users] == ["1", "2", "3"]
-    assert calls == [1, 2]
+    assert calls == [1, 2, 3]
+
+    # API, игнорирующий page, не зацикливает выгрузку
+    async def same_page(func, *a, **kw):
+        return [user(1)]
+
+    monkeypatch.setattr(backup, "run_query", same_page)
+    with pytest.raises(RuntimeError):
+        asyncio.run(backup._dump_auth_users())
 
 
 def test_last_backup_time_ignores_future_names():
