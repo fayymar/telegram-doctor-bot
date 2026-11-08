@@ -1,4 +1,7 @@
 """HTTP API данных пользователя: профиль, лекарства, дневник."""
+import re
+from datetime import date
+
 from aiohttp import web
 
 from api.common import (
@@ -43,6 +46,155 @@ async def api_profile_get(request: web.Request) -> web.Response:
         return json_response({"error": "Internal server error"}, status=500)
 
 
+# Курение и активность хранятся кодами (их понимают бот и ИИ-консультант).
+# Сайт и Mini App раньше присылали подписи кнопок — переводим их в коды.
+_SMOKING_CODES = {"no", "yes", "quit"}
+_SMOKING_LABELS = {
+    "не курю": "no", "не курит": "no", "нет": "no",
+    "курю": "yes", "курит": "yes", "да": "yes",
+    "бросил(а)": "quit", "бросил": "quit", "бросила": "quit",
+}
+_ACTIVITY_CODES = {"sedentary", "light", "moderate", "active", "athlete"}
+_ACTIVITY_LABELS = {
+    "сидячий": "sedentary", "низкая": "light", "лёгкий": "light", "легкий": "light",
+    "умеренная": "moderate", "умеренный": "moderate",
+    "высокая": "active", "активный": "active", "спортсмен": "athlete",
+}
+_GENDER_LABELS = {"male": "male", "female": "female", "мужской": "male", "женский": "female"}
+_NONE_ITEMS = {"нет", "ничего", "не знаю"}
+_MAX_LIST_ITEMS = 30
+_MAX_INPUT_ITEMS = 200
+_MAX_ITEM_LEN = 200
+_MAX_TEXT_LEN = 1000
+
+
+class _InvalidField(ValueError):
+    def __init__(self, field: str):
+        super().__init__(field)
+        self.field = field
+
+
+def _label(value) -> str:
+    """«🚭 Не курю» -> «не курю»: без значков в начале, в нижнем регистре."""
+    return re.sub(r"^[^\w(]+", "", str(value)).strip().lower()
+
+
+def _empty(value) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _text(value, field: str, limit: int) -> str | None:
+    if _empty(value):
+        return None
+    if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+        raise _InvalidField(field)
+    return str(value).strip()[:limit]
+
+
+def _string_list(value, field: str) -> list[str]:
+    """Список строк из списка или из строки «Диабет, Гипертония» (так присылал сайт)."""
+    if _empty(value):
+        return []
+    if isinstance(value, str):
+        value = re.split(r"[,;\n]", value)
+    if not isinstance(value, list):
+        raise _InvalidField(field)
+    items: list[str] = []
+    # Разбираем не больше _MAX_INPUT_ITEMS элементов и не больше 1000 символов
+    # каждого: объём работы ограничен независимо от размера запроса
+    for item in value[:_MAX_INPUT_ITEMS]:
+        if not isinstance(item, str):
+            raise _InvalidField(field)
+        item = re.sub(r"^[^\w(]+", "", item[:1000]).strip()[:_MAX_ITEM_LEN]  # без значков в начале
+        if item and item.lower() not in _NONE_ITEMS and item not in items:
+            items.append(item)
+            if len(items) >= _MAX_LIST_ITEMS:  # дальше не разбираем: защита от огромных списков
+                break
+    return items
+
+
+def _code(value, field: str, codes: set[str], labels: dict[str, str]) -> str | None:
+    if _empty(value):
+        return None
+    if not isinstance(value, str):
+        raise _InvalidField(field)
+    if value in codes:
+        return value
+    code = labels.get(_label(value))
+    if code is None:
+        raise _InvalidField(field)
+    return code
+
+
+def _number(value, field: str, low: float, high: float, integer: bool):
+    if _empty(value):
+        return None
+    try:
+        number = float(str(value).replace(",", "."))
+    except ValueError:
+        raise _InvalidField(field) from None
+    if not low <= number <= high:
+        raise _InvalidField(field)
+    return int(round(number)) if integer else round(number, 1)
+
+
+def _birthdate(value) -> str | None:
+    if _empty(value):
+        return None
+    if not isinstance(value, str):
+        raise _InvalidField("birthdate")
+    try:
+        parsed = date.fromisoformat(value.strip()[:10])
+    except ValueError:
+        raise _InvalidField("birthdate") from None
+    if not date(1900, 1, 1) <= parsed <= date.today():
+        raise _InvalidField("birthdate")
+    return parsed.isoformat()
+
+
+def normalize_profile(body: dict) -> dict:
+    """
+    Приводит профиль к виду, в котором его сохраняет бот: списки болезней —
+    списками, курение и активность — кодами, пустые значения — null.
+    Неизвестные поля отбрасываются, недопустимые значения — _InvalidField.
+    """
+    data: dict = {}
+    if "full_name" in body:
+        data["full_name"] = _text(body["full_name"], "full_name", 200)
+    if "phone" in body:
+        data["phone"] = _text(body["phone"], "phone", 40)
+    if "birthdate" in body:
+        data["birthdate"] = _birthdate(body["birthdate"])
+    if "gender" in body:
+        data["gender"] = _code(body["gender"], "gender", {"male", "female"}, _GENDER_LABELS)
+    if "height" in body:
+        data["height"] = _number(body["height"], "height", 30, 260, integer=True)
+    if "weight" in body:
+        data["weight"] = _number(body["weight"], "weight", 2, 400, integer=False)
+    for field in ("chronic_diseases", "hereditary"):
+        if field in body:
+            data[field] = _string_list(body[field], field)
+    if "smoking" in body:
+        data["smoking"] = _code(body["smoking"], "smoking", _SMOKING_CODES, _SMOKING_LABELS)
+    if "physical_activity" in body:
+        data["physical_activity"] = _code(body["physical_activity"], "physical_activity",
+                                          _ACTIVITY_CODES, _ACTIVITY_LABELS)
+    # Аллергии: бот хранит строкой «A, B». Старый Mini App присылал список
+    # allergies и отдельное поле allergies_other.
+    if "drug_allergies" in body:
+        raw = body["drug_allergies"]
+        items = _string_list(raw, "drug_allergies") if isinstance(raw, list) else None
+        data["drug_allergies"] = ", ".join(items) if items is not None else (
+            _text(raw, "drug_allergies", _MAX_TEXT_LEN) or "")
+    elif "allergies" in body or "allergies_other" in body:
+        items = _string_list(body.get("allergies"), "allergies")
+        other = _text(body.get("allergies_other"), "allergies_other", _MAX_TEXT_LEN)
+        if other:
+            items.append(other)
+        data["drug_allergies"] = ", ".join(items)[:_MAX_TEXT_LEN]
+    return data
+
+
 @auth_required
 @consent_required
 async def api_profile_post(request: web.Request) -> web.Response:
@@ -56,8 +208,10 @@ async def api_profile_post(request: web.Request) -> web.Response:
     if not isinstance(body, dict):
         return json_response({"error": "Invalid JSON"}, status=400)
 
-    # Берём только допустимые поля профиля
-    update_data = {k: v for k, v in body.items() if k in _PROFILE_FIELDS}
+    try:
+        update_data = normalize_profile(body)
+    except _InvalidField as e:
+        return json_response({"error": "invalid_field", "field": e.field}, status=400)
     if not update_data:
         return json_response({"error": "No valid profile fields provided"}, status=400)
 

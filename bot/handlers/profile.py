@@ -27,6 +27,7 @@ from bot.states import EditProfile, Registration
 from database.connection import run_query, supabase_client
 from services.phone_formatter import format_phone_number, get_phone_info
 from utils.logger import setup_logger
+from utils.markdown import escape_markdown
 from utils.validators import (
     sanitize_text,
     validate_age_or_birthdate,
@@ -60,6 +61,20 @@ GENDER_CODE_TO_TEXT = {
 
 def _get_gender_keyboard_by_lang(lang: str = "ru"):
     return get_gender_keyboard(lang)
+
+
+def _md(value, default: str = "не указано", limit: int = 400) -> str:
+    """Значение из профиля для сообщения с parse_mode=Markdown. Данные могут
+    прийти с сайта или из Mini App: символы разметки (_ * ` [) экранируем,
+    иначе Telegram отклонит сообщение и профиль не откроется. Длинные значения
+    обрезаем, чтобы всё сообщение уложилось в лимит Telegram (4096 символов)."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return default
+    text = str(value)
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "…"
+    # Обратную косую черту заменяем: экранирование не должно зависеть от соседних символов
+    return escape_markdown(text.replace("\\", "/"))
 
 
 def _format_birthdate_and_age(birthdate_value):
@@ -298,8 +313,8 @@ async def show_profile(message: Message):
         sex_text = GENDER_CODE_TO_TEXT.get(lang, GENDER_CODE_TO_TEXT["ru"]).get(gender_code, "не указано")
 
         profile_text = "👤 *Ваш профиль*\n\n"
-        profile_text += f"*ФИО:* {profile.get('full_name', 'не указано')}\n"
-        profile_text += f"*Телефон:* {profile.get('phone', 'не указано')}\n"
+        profile_text += f"*ФИО:* {_md(profile.get('full_name'))}\n"
+        profile_text += f"*Телефон:* {_md(profile.get('phone'))}\n"
         profile_text += f"*Дата рождения:* {birthdate_formatted}"
 
         if age is not None:
@@ -308,15 +323,16 @@ async def show_profile(message: Message):
             profile_text += "\n"
 
         profile_text += f"*Пол:* {sex_text}\n"
-        profile_text += f"*Рост:* {profile.get('height', 'не указано')} см\n"
-        profile_text += f"*Вес:* {profile.get('weight', 'не указано')} кг\n"
+        height, weight = profile.get("height"), profile.get("weight")
+        profile_text += f"*Рост:* {f'{height} см' if height else 'не указано'}\n"
+        profile_text += f"*Вес:* {f'{weight} кг' if weight else 'не указано'}\n"
 
         chronic = profile.get("chronic_diseases") or []
-        profile_text += f"*Хронические:* {', '.join(chronic) if chronic else 'не указано'}\n"
+        profile_text += f"*Хронические:* {_md(', '.join(chronic))}\n"
         hereditary = profile.get("hereditary") or []
-        profile_text += f"*Наследственность:* {', '.join(hereditary) if hereditary else 'не указано'}\n"
+        profile_text += f"*Наследственность:* {_md(', '.join(hereditary))}\n"
         allergies = (profile.get("drug_allergies") or "").strip()
-        profile_text += f"*Аллергии:* {allergies if allergies else 'не указано'}\n"
+        profile_text += f"*Аллергии:* {_md(allergies)}\n"
         _sm = {"yes": "🚬 Курит", "quit": "✅ Бросил(а)", "no": "🚭 Не курит"}
         profile_text += f"*Курение:* {_sm.get(profile.get('smoking', 'no'), '—')}"
 

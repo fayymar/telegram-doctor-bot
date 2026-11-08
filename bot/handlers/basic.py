@@ -1,3 +1,5 @@
+import html
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -301,6 +303,16 @@ async def on_user_blocked_bot(update: ChatMemberUpdated):
             logger.error(f"Error deleting user data for {user_id}: {type(e).__name__}")
 
 
+def _short(value: str, limit: int = 400) -> str:
+    """Длинные значения профиля обрезаем: сообщение Telegram — не больше 4096 символов."""
+    value = (value or "").strip()
+    if not value:
+        return "не указано"
+    value = value if len(value) <= limit else value[:limit].rstrip() + "…"
+    # Сообщения бота по умолчанию разбираются как HTML (bot/instance.py)
+    return html.escape(value)
+
+
 @router.message(Command("profile"))
 async def cmd_profile(message: Message):
     user_id = message.from_user.id
@@ -331,13 +343,13 @@ async def cmd_profile(message: Message):
         smoking_map = {"yes": "🚬 Курит", "quit": "✅ Бросил(а)", "no": "🚭 Не курит"}
         lines = [
             "👤 Ваш профиль:\n",
-            f"Имя: {name}", f"Дата рождения: {dob}", f"Пол: {sex}",
+            f"Имя: {_short(name)}", f"Дата рождения: {dob}", f"Пол: {sex}",
             f"Рост: {p.get('height') or 'не указано'} см",
             f"Вес: {p.get('weight') or 'не указано'} кг",
-            f"Телефон: {p.get('phone') or 'не указано'}", "",
-            f"Хронические: {', '.join(chronic) if chronic else 'не указано'}",
-            f"Наследственность: {', '.join(hereditary) if hereditary else 'не указано'}",
-            f"Аллергии: {allergies if allergies else 'не указано'}",
+            f"Телефон: {_short(p.get('phone'))}", "",
+            f"Хронические: {_short(', '.join(chronic))}",
+            f"Наследственность: {_short(', '.join(hereditary))}",
+            f"Аллергии: {_short(allergies)}",
             f"Курение: {smoking_map.get(p.get('smoking', 'no'), '—')}",
             "\nДля обновления используйте кнопку «Профиль» в меню.",
         ]
