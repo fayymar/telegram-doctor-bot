@@ -28,6 +28,7 @@ from bot.shared import site_code_store, site_codes
 from config import FSM_TIMEOUT
 from database.connection import run_query, supabase_client
 from services import persistent_state
+from services.backup import backup_loop
 from services.persistent_state import PersistentMemoryStorage
 from services.sessions import load_revocations, revocation_sync_loop
 from utils.logger import setup_logger
@@ -221,13 +222,15 @@ async def main():
         # Незавершённые консультации, коды входа и шаги диалогов — до запуска
         # бота и API, чтобы первые же запросы их видели
         await persistent_state.load_all()
-        task_names = ("web_server", "bot", "cleanup_stale_sessions", "supabase_keepalive", "revocation_sync")
+        task_names = ("web_server", "bot", "cleanup_stale_sessions", "supabase_keepalive", "revocation_sync",
+                      "backup")
         results = await asyncio.gather(
             start_web_server(),
             start_bot(),
             cleanup_stale_sessions(),
             supabase_keepalive(),
             revocation_sync_loop(),
+            backup_loop(),
             return_exceptions=True
         )
         for name, result in zip(task_names, results):
