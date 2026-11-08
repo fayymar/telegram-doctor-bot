@@ -104,7 +104,8 @@ class R2:
         headers = sign_request(method, url, hashlib.sha256(body).hexdigest(), self.access_key,
                                self.secret_key, datetime.now(timezone.utc))
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session:
-            async with session.request(method, url, data=body or None, headers=headers) as resp:
+            async with session.request(method, url, data=body or None, headers=headers,
+                                       allow_redirects=False) as resp:
                 content = await resp.read()
                 if resp.status >= 300:
                     # тело ответа R2 не содержит секретов, но и в лог его не пишем целиком
