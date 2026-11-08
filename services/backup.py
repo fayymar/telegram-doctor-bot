@@ -141,17 +141,22 @@ class R2:
 # ── Выгрузка ─────────────────────────────────────────────────────────────────
 
 async def _dump_table(table: str, pk: str) -> list[dict]:
+    """Постранично по первичному ключу (pk > последнего): удаления строк во время
+    выгрузки не сдвигают страницы и не приводят к пропускам."""
     rows: list[dict] = []
-    start = 0
+    last = None
     while True:
-        page = await run_query(
-            lambda s=start: supabase_client.table(table).select("*").order(pk).range(s, s + _PAGE - 1).execute()
-        )
-        data = page.data or []
+        def query(after=last):
+            q = supabase_client.table(table).select("*").order(pk).limit(_PAGE)
+            if after is not None:
+                q = q.gt(pk, after)
+            return q.execute()
+
+        data = (await run_query(query)).data or []
         if not data:
             return rows
         rows.extend(data)
-        start += len(data)
+        last = data[-1][pk]
 
 
 async def _dump_auth_users() -> list[dict]:

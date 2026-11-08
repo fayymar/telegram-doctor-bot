@@ -33,3 +33,8 @@ Thumbs.db
 test.py
 debug/
 temp/
+
+# Резервные копии и ключ расшифровки (scripts/backup_tool.py) — не в репозиторий
+*.key
+*.json.gz.enc
+backup*.json

@@ -139,15 +139,49 @@ def test_failed_upload_keeps_old_backups(monkeypatch):
     assert old in r2.objects
 
 
-def test_dump_table_pages(monkeypatch):
+def test_dump_table_pages_by_key(monkeypatch):
+    """Страницы идут по первичному ключу: удаление строки между страницами
+    не приводит к пропуску следующей."""
     monkeypatch.setattr(backup, "_PAGE", 2)
-    pages = [[{"id": 1}, {"id": 2}], [{"id": 3}], []]
+    table = [{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}, {"id": 5}]
+    filters = []
+
+    class Query:
+        def __init__(self):
+            self.after = None
+
+        def select(self, *_):
+            return self
+
+        def order(self, col):
+            assert col == "id"
+            return self
+
+        def limit(self, n):
+            self.n = n
+            return self
+
+        def gt(self, col, value):
+            self.after = value
+            return self
+
+        def execute(self):
+            filters.append(self.after)
+            rows = [r for r in table if self.after is None or r["id"] > self.after][:self.n]
+            if self.after == 2:
+                table.remove({"id": 1})  # строку удалили во время выгрузки
+            return type("R", (), {"data": rows})()
+
+    fake_client = type("C", (), {"table": lambda self, name: Query()})()
+    monkeypatch.setattr(backup, "supabase_client", fake_client)
 
     async def fake_run_query(func, *a, **kw):
-        return type("R", (), {"data": pages.pop(0)})()
+        return func(*a, **kw)
 
     monkeypatch.setattr(backup, "run_query", fake_run_query)
-    assert asyncio.run(backup._dump_table("consents", "id")) == [{"id": 1}, {"id": 2}, {"id": 3}]
+    rows = asyncio.run(backup._dump_table("consents", "id"))
+    assert [r["id"] for r in rows] == [1, 2, 3, 4, 5]
+    assert filters == [None, 2, 4, 5]
 
 
 def test_r2_list_parses_pages(monkeypatch):
