@@ -208,3 +208,25 @@ def test_backup_tool_keygen_and_decrypt(tmp_path, capsys):
     assert json.loads(out.read_text()) == {"ok": 1}
     with pytest.raises(SystemExit):
         backup_tool.main(["keygen", str(key_file)])  # не перезаписывает ключ
+
+
+def test_dump_auth_users_stops_on_short_page(monkeypatch):
+    monkeypatch.setattr(backup, "_PAGE", 2)
+    User = type("U", (), {})
+
+    def user(i):
+        u = User()
+        u.id, u.email, u.phone, u.created_at, u.app_metadata = i, f"{i}@x", None, "", {"providers": ["email"]}
+        return u
+
+    pages = [[user(1), user(2)], [user(3)]]
+    calls = []
+
+    async def fake_run_query(func, *a, **kw):
+        calls.append(kw["page"])
+        return pages.pop(0)
+
+    monkeypatch.setattr(backup, "run_query", fake_run_query)
+    users = asyncio.run(backup._dump_auth_users())
+    assert [u["id"] for u in users] == ["1", "2", "3"]
+    assert calls == [1, 2]

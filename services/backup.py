@@ -160,9 +160,11 @@ async def _dump_auth_users() -> list[dict]:
     users: list[dict] = []
     page = 1
     while True:
-        batch = await run_query(supabase_client.auth.admin.list_users, page=page, per_page=1000)
+        batch = await run_query(supabase_client.auth.admin.list_users, page=page, per_page=_PAGE)
         if not batch:
             return users
+        if page > 1000:  # защита от бесконечного цикла, если API игнорирует page
+            raise RuntimeError("auth users pagination did not terminate")
         for u in batch:
             users.append({
                 "id": str(u.id),
@@ -171,6 +173,8 @@ async def _dump_auth_users() -> list[dict]:
                 "created_at": str(getattr(u, "created_at", "") or ""),
                 "providers": (getattr(u, "app_metadata", None) or {}).get("providers"),
             })
+        if len(batch) < _PAGE:
+            return users
         page += 1
 
 
