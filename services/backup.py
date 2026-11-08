@@ -183,7 +183,9 @@ async def build_backup() -> bytes:
     for table, pk in BACKUP_TABLES.items():
         data["tables"][table] = await _dump_table(table, pk)
     data["auth_users"] = await _dump_auth_users()
-    return gzip.compress(json.dumps(data, ensure_ascii=False, default=str).encode())
+    # Сериализация и сжатие — в отдельном потоке, чтобы не задерживать бота
+    return await asyncio.to_thread(
+        lambda: gzip.compress(json.dumps(data, ensure_ascii=False, default=str).encode()))
 
 
 def _config() -> dict | None:
@@ -223,7 +225,7 @@ async def run_backup(cfg: dict, r2: R2 | None = None) -> str:
     r2 = r2 or R2(cfg["endpoint"], cfg["bucket"], cfg["access_key"], cfg["secret_key"])
     now = datetime.now(timezone.utc)
     key = f"{PREFIX}{now.strftime('%Y-%m-%dT%H-%M-%SZ')}.json.gz.enc"
-    blob = encrypt(await build_backup(), cfg["public_key"])
+    blob = await asyncio.to_thread(encrypt, await build_backup(), cfg["public_key"])
     await r2.put(key, blob)
     logger.info(f"Backup uploaded: {key} ({len(blob)} bytes)")
     cutoff = now - timedelta(days=cfg["keep_days"])
