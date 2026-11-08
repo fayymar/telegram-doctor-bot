@@ -229,7 +229,7 @@ async def export_anamnesis(message: Message):
 
         caption = (
             "📄 *Ваш медицинский анамнез*\n\n"
-            f"Профиль: {escape_markdown(user_profile.get('full_name') or 'Не указано')}\n"
+            f"Профиль: {escape_markdown((user_profile.get('full_name') or 'Не указано').replace(chr(92), '/'))}\n"
             f"Консультаций: {len(consultations)}\n\n"
             "⚠️ Этот документ носит информационный характер"
         )

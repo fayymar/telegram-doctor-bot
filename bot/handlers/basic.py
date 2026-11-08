@@ -1,3 +1,5 @@
+import html
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -306,7 +308,9 @@ def _short(value: str, limit: int = 400) -> str:
     value = (value or "").strip()
     if not value:
         return "не указано"
-    return value if len(value) <= limit else value[:limit].rstrip() + "…"
+    value = value if len(value) <= limit else value[:limit].rstrip() + "…"
+    # Сообщения бота по умолчанию разбираются как HTML (bot/instance.py)
+    return html.escape(value)
 
 
 @router.message(Command("profile"))
@@ -342,7 +346,7 @@ async def cmd_profile(message: Message):
             f"Имя: {_short(name)}", f"Дата рождения: {dob}", f"Пол: {sex}",
             f"Рост: {p.get('height') or 'не указано'} см",
             f"Вес: {p.get('weight') or 'не указано'} кг",
-            f"Телефон: {p.get('phone') or 'не указано'}", "",
+            f"Телефон: {_short(p.get('phone'))}", "",
             f"Хронические: {_short(', '.join(chronic))}",
             f"Наследственность: {_short(', '.join(hereditary))}",
             f"Аллергии: {_short(allergies)}",
