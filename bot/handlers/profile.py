@@ -63,13 +63,17 @@ def _get_gender_keyboard_by_lang(lang: str = "ru"):
     return get_gender_keyboard(lang)
 
 
-def _md(value, default: str = "не указано") -> str:
+def _md(value, default: str = "не указано", limit: int = 400) -> str:
     """Значение из профиля для сообщения с parse_mode=Markdown. Данные могут
     прийти с сайта или из Mini App: символы разметки (_ * ` [) экранируем,
-    иначе Telegram отклонит сообщение и профиль не откроется."""
+    иначе Telegram отклонит сообщение и профиль не откроется. Длинные значения
+    обрезаем, чтобы всё сообщение уложилось в лимит Telegram (4096 символов)."""
     if value is None or (isinstance(value, str) and not value.strip()):
         return default
-    return re.sub(r"([_*`\[])", r"\\\1", str(value))
+    text = str(value)
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "…"
+    return re.sub(r"([_*`\[])", r"\\\1", text)
 
 
 def _format_birthdate_and_age(birthdate_value):

@@ -157,3 +157,16 @@ def test_bot_profile_markdown_escaping():
     assert _md("[латекс]`") == "\\[латекс]\\`"
     assert _md(None) == "не указано" and _md("  ") == "не указано"
     assert _md("Иван") == "Иван"
+
+
+def test_bot_profile_fits_telegram_limit():
+    """Максимальный профиль после нормализации укладывается в 4096 символов сообщения."""
+    from bot.handlers.profile import _md
+    data = normalize_profile({
+        "full_name": "_" * 500, "phone": "*" * 100,
+        "chronic_diseases": ["_" * 300 + str(i) for i in range(40)],
+        "hereditary": ["_" * 300 + str(i) for i in range(40)],
+        "drug_allergies": "_" * 2000,
+    })
+    text = "".join(_md(v if isinstance(v, str) else ", ".join(v)) for v in data.values())
+    assert len(text) < 3600  # плюс подписи полей — всё равно меньше 4096
